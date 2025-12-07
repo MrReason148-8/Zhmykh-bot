@@ -14,8 +14,8 @@ while (process.env[`GOOGLE_GEMINI_API_KEY_${i}`]) {
 console.log(`[CONFIG] Загружено ключей Gemini: ${geminiKeys.length}`);
 
 module.exports = {
-  telegramToken: process.env.TELEGRAM_BOT_TOKEN,
-  botId: parseInt(process.env.TELEGRAM_BOT_TOKEN.split(':')[0], 10),
+  telegramToken: process.env.TELEGRAM_BOT_TOKEN || process.env.TG_KEY,
+  botId: parseInt((process.env.TELEGRAM_BOT_TOKEN || process.env.TG_KEY || "").split(':')[0], 10),
   adminId: parseInt(process.env.ADMIN_USER_ID, 10),
 
   geminiKeys: geminiKeys,
