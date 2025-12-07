@@ -76,22 +76,41 @@ class AiService {
   }
 
   async callOpenRouter(userMessage) {
-    const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-      model: 'google/gemini-2.0-flash-exp:free', // Бесплатная модель
-      messages: [
-        { role: 'system', content: prompts.system() },
-        { role: 'user', content: userMessage }
-      ],
-      temperature: 0.9,
-      max_tokens: 2000
-    }, {
-      headers: {
-        'Authorization': `Bearer ${config.openRouterKey}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    if (!config.openRouterKey) {
+      throw new Error('OPENROUTER_API_KEY не задан в переменных окружения!');
+    }
 
-    return response.data.choices[0].message.content;
+    console.log('[OPENROUTER] Отправляю запрос к DeepSeek...');
+
+    try {
+      const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+        model: 'tngtech/deepseek-r1t2-chimera:free',
+        messages: [
+          { role: 'system', content: prompts.system() },
+          { role: 'user', content: userMessage }
+        ],
+        temperature: 0.9,
+        max_tokens: 2000
+      }, {
+        headers: {
+          'Authorization': `Bearer ${config.openRouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://github.com/MrReason148-8/Zhmykh-bot',
+          'X-Title': 'Zhmykh Bot'
+        }
+      });
+
+      console.log('[OPENROUTER] Ответ получен успешно');
+      return response.data.choices[0].message.content;
+    } catch (error) {
+      console.error('[OPENROUTER ERROR] Детали:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      });
+      throw error;
+    }
   }
 
   getCurrentTime() {
