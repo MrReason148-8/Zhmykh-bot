@@ -24,6 +24,8 @@ module.exports = {
   contextSize: 200,
   spontaneousChance: 0.02, // Шанс вмешательства (2%)
   triggerRegex: /(?<![а-яёa-z])(жмых|zhmykh)(?![а-яёa-z])/i,
+  geminiBaseUrl: process.env.GEMINI_BASE_URL || undefined,
+  openRouterKey: process.env.OPENROUTER_API_KEY || null,
 
 };
 

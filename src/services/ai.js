@@ -27,6 +27,8 @@ class AiService {
       temperature: 0.9,
     };
 
+    const requestOptions = config.geminiBaseUrl ? { baseUrl: config.geminiBaseUrl } : {};
+
     // [FIX] Добавляем системную инструкцию прямо в модель для железного характера
     this.model = genAI.getGenerativeModel({
       model: config.modelName,
@@ -34,7 +36,7 @@ class AiService {
       safetySettings: safetySettings,
       generationConfig: generationConfig,
       tools: [{ googleSearch: {} }]
-    });
+    }, requestOptions);
   }
 
   rotateKey() {
@@ -43,7 +45,8 @@ class AiService {
     this.initModel();
   }
 
-  async executeWithRetry(apiCallFn) {
+  async executeWithRetry(apiCallFn, fallbackText = null) {
+    // Пробуем все ключи Gemini
     for (let attempt = 0; attempt < this.keys.length; attempt++) {
       try {
         return await apiCallFn();
@@ -57,7 +60,38 @@ class AiService {
         }
       }
     }
+
+    // Если все ключи Gemini исчерпаны, пробуем OpenRouter
+    if (config.openRouterKey && fallbackText) {
+      console.log('[AI FALLBACK] Все ключи Gemini исчерпаны, переключаюсь на OpenRouter...');
+      try {
+        return await this.callOpenRouter(fallbackText);
+      } catch (orError) {
+        console.error('[OPENROUTER ERROR]:', orError.message);
+        throw new Error("Все ключи Gemini исчерпали лимит, OpenRouter тоже не ответил!");
+      }
+    }
+
     throw new Error("Все ключи Gemini исчерпали лимит!");
+  }
+
+  async callOpenRouter(userMessage) {
+    const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+      model: 'google/gemini-2.0-flash-exp:free', // Бесплатная модель
+      messages: [
+        { role: 'system', content: prompts.system() },
+        { role: 'user', content: userMessage }
+      ],
+      temperature: 0.9,
+      max_tokens: 2000
+    }, {
+      headers: {
+        'Authorization': `Bearer ${config.openRouterKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    return response.data.choices[0].message.content;
   }
 
   getCurrentTime() {
@@ -161,7 +195,10 @@ class AiService {
       return text;
     };
 
-    try { return await this.executeWithRetry(requestLogic); } catch (e) { throw e; }
+    try {
+      // Передаем текст сообщения как fallback для OpenRouter
+      return await this.executeWithRetry(requestLogic, currentMessage.text);
+    } catch (e) { throw e; }
   }
 
   // === РЕАКЦИЯ ===
