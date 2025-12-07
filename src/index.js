@@ -6,43 +6,43 @@ const storage = require('./services/storage');
 // Создаем бота
 const bot = new TelegramBot(config.telegramToken, { polling: true });
 
-console.log("Сыч запущен и готов пояснять за жизнь.");
+console.log("Жмых запущен и готов пояснять за жизнь.");
 console.log(`Admin ID: ${config.adminId}`);
 
 // === ТИКЕР НАПОМИНАЛОК (Проверка каждую минуту) ===
 setInterval(() => {
   const pending = storage.getPendingReminders();
-  
+
   if (pending.length > 0) {
-      console.log(`[REMINDER] Сработало напоминаний: ${pending.length}`);
-      
-      const idsToRemove = [];
+    console.log(`[REMINDER] Сработало напоминаний: ${pending.length}`);
 
-      pending.forEach(task => {
-          // Формируем сообщение
-          const message = `⏰ ${task.username}, напоминаю!\n\n${task.text}`;
-          
-          // Отправляем
-          bot.sendMessage(task.chatId, message).then(() => {
-              console.log(`[REMINDER] Успешно отправлено: ${task.text}`);
-          }).catch(err => {
-              console.error(`[REMINDER ERROR] Не смог отправить в ${task.chatId}: ${err.message}`);
-              // Если юзер заблочил бота, все равно удаляем, чтобы не спамить в лог ошибками
-          });
+    const idsToRemove = [];
 
-          idsToRemove.push(task.id);
+    pending.forEach(task => {
+      // Формируем сообщение
+      const message = `⏰ ${task.username}, напоминаю!\n\n${task.text}`;
+
+      // Отправляем
+      bot.sendMessage(task.chatId, message).then(() => {
+        console.log(`[REMINDER] Успешно отправлено: ${task.text}`);
+      }).catch(err => {
+        console.error(`[REMINDER ERROR] Не смог отправить в ${task.chatId}: ${err.message}`);
+        // Если юзер заблочил бота, все равно удаляем, чтобы не спамить в лог ошибками
       });
 
-      // Чистим базу
-      storage.removeReminders(idsToRemove);
+      idsToRemove.push(task.id);
+    });
+
+    // Чистим базу
+    storage.removeReminders(idsToRemove);
   }
 }, 60 * 1000); // 60000 мс = 1 минута
 
 // Обработка ошибок поллинга
 bot.on('polling_error', (error) => {
-    console.error(`[POLLING ERROR] ${error.code}: ${error.message}`);
-    // Если ошибка "Conflict: terminated by other getUpdates", значит запущен второй экземпляр
-  });
+  console.error(`[POLLING ERROR] ${error.code}: ${error.message}`);
+  // Если ошибка "Conflict: terminated by other getUpdates", значит запущен второй экземпляр
+});
 
 // Единый вход для всех сообщений
 bot.on('message', async (msg) => {
@@ -56,40 +56,40 @@ bot.on('message', async (msg) => {
   // === 🛡 SECURITY PROTOCOL: "ВЕРНЫЙ ОРУЖЕНОСЕЦ" ===
   // Проверяем наличие Админа в ЛЮБОМ групповом чате при ЛЮБОМ сообщении
   if (msg.chat.type !== 'private') {
-      try {
-          // 1. Проверяем статус Админа в этом чате
-          const adminMember = await bot.getChatMember(chatId, config.adminId);
-          const allowedStatuses = ['creator', 'administrator', 'member'];
+    try {
+      // 1. Проверяем статус Админа в этом чате
+      const adminMember = await bot.getChatMember(chatId, config.adminId);
+      const allowedStatuses = ['creator', 'administrator', 'member'];
 
-          // 2. Если Админа нет (left, kicked) или он не участник
-          if (!allowedStatuses.includes(adminMember.status)) {
-            console.log(`[SECURITY] ⛔ Обнаружен чат без Админа...`);
-            
-            // ВОТ ТУТ МЕНЯЕМ СООБЩЕНИЕ
-            const phrases = [
-                "Так, стопэ. Админа не вижу. Благотворительности не будет, я уёбываю!",
-                "Опа, куда это меня занесло? Бати рядом нет, так что я уёбываю!",
-                "Вы че думали, украли бота? Я не работаю в беспризорных приютах. Я уёбываю!",
-                "⚠️ ERROR: ADMIN NOT FOUND. Включаю протокол самоуважения. Я уёбываю!",
-                "Не, ну вы видели? Затащили без спроса. Ну вас нахер, я уёбываю!"
-            ];
-            const randomPhrase = phrases[Math.floor(Math.random() * phrases.length)];
+      // 2. Если Админа нет (left, kicked) или он не участник
+      if (!allowedStatuses.includes(adminMember.status)) {
+        console.log(`[SECURITY] ⛔ Обнаружен чат без Админа...`);
 
-            await bot.sendMessage(chatId, randomPhrase).catch(() => {});
-            await bot.leaveChat(chatId).catch(() => {});
-            return; 
-        }
-      } catch (e) {
-          // Если мы даже не можем проверить админа (например, бот забанен или нет прав), лучше уйти
-          console.error(`[SECURITY ERROR] Ошибка проверки прав в "${chatTitle}": ${e.message}`);
-          // На всякий случай пытаемся выйти, если ошибка критичная
-          if (e.message.includes('chat not found') || e.message.includes('kicked')) {
-             // Игнорим, мы и так не там
-          } else {
-             // Пытаемся выйти
-             bot.leaveChat(chatId).catch(() => {});
-          }
+        // ВОТ ТУТ МЕНЯЕМ СООБЩЕНИЕ
+        const phrases = [
+          "Так, стопэ. Админа не вижу. Благотворительности не будет, я уёбываю!",
+          "Опа, куда это меня занесло? Бати рядом нет, так что я уёбываю!",
+          "Вы че думали, украли бота? Я не работаю в беспризорных приютах. Я уёбываю!",
+          "⚠️ ERROR: ADMIN NOT FOUND. Включаю протокол самоуважения. Я уёбываю!",
+          "Не, ну вы видели? Затащили без спроса. Ну вас нахер, я уёбываю!"
+        ];
+        const randomPhrase = phrases[Math.floor(Math.random() * phrases.length)];
+
+        await bot.sendMessage(chatId, randomPhrase).catch(() => { });
+        await bot.leaveChat(chatId).catch(() => { });
+        return;
       }
+    } catch (e) {
+      // Если мы даже не можем проверить админа (например, бот забанен или нет прав), лучше уйти
+      console.error(`[SECURITY ERROR] Ошибка проверки прав в "${chatTitle}": ${e.message}`);
+      // На всякий случай пытаемся выйти, если ошибка критичная
+      if (e.message.includes('chat not found') || e.message.includes('kicked')) {
+        // Игнорим, мы и так не там
+      } else {
+        // Пытаемся выйти
+        bot.leaveChat(chatId).catch(() => { });
+      }
+    }
   }
 
   // === ЛОГИКА ВЫХОДА ВСЛЕД ЗА АДМИНОМ (ХАТИКО) ===
@@ -107,6 +107,6 @@ bot.on('message', async (msg) => {
 // Сохраняем базу при выходе
 process.on('SIGINT', () => {
   console.log("Сохранение данных перед выходом...");
-  storage.forceSave(); 
+  storage.forceSave();
   process.exit();
 });

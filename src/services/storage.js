@@ -12,13 +12,13 @@ class StorageService {
     this.saveDebounced = debounce(this._saveToFile.bind(this), 5000);
     this.saveProfilesDebounced = debounce(this._saveProfilesToFile.bind(this), 5000);
     this.data = { chats: {} };
-    this.profiles = {}; 
+    this.profiles = {};
 
     // 1. Создаем структуру файлов, если их нет
     this.ensureFile(DB_PATH, '{"chats": {}}');
     this.ensureFile(INSTRUCTIONS_PATH, '{}');
     this.ensureFile(PROFILES_PATH, '{}');
-    
+
     // 2. Загружаем данные в память
     this.load();
   }
@@ -34,16 +34,16 @@ class StorageService {
       this.data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
       // Если базы напоминаний нет — создаем пустую
       if (!this.data.reminders) this.data.reminders = [];
-    } catch (e) { 
-      console.error("Ошибка чтения DB, сброс."); 
+    } catch (e) {
+      console.error("Ошибка чтения DB, сброс.");
       this.data = { chats: {}, reminders: [] };
     }
     // Грузим профили
     try {
       this.profiles = JSON.parse(fs.readFileSync(PROFILES_PATH, 'utf-8'));
-    } catch (e) { 
+    } catch (e) {
       console.error("Ошибка чтения Profiles, сброс.");
-      this.profiles = {}; 
+      this.profiles = {};
     }
   }
 
@@ -51,14 +51,14 @@ class StorageService {
 
   addReminder(chatId, userId, username, timeIso, text) {
     if (!this.data.reminders) this.data.reminders = [];
-    
+
     this.data.reminders.push({
-        id: Date.now() + Math.random(), // Уникальный ID
-        chatId,
-        userId,
-        username,
-        time: timeIso, // Время срабатывания (ISO string)
-        text: text
+      id: Date.now() + Math.random(), // Уникальный ID
+      chatId,
+      userId,
+      username,
+      time: timeIso, // Время срабатывания (ISO string)
+      text: text
     });
     this.save();
   }
@@ -66,16 +66,16 @@ class StorageService {
   // Получить задачи, время которых пришло
   getPendingReminders() {
     if (!this.data.reminders) return [];
-    
+
     // Берем текущее время как ЧИСЛО (миллисекунды с 1970 года)
     const now = Date.now();
-    
+
     return this.data.reminders.filter(r => {
-        // Превращаем время из базы тоже в ЧИСЛО
-        const taskTime = new Date(r.time).getTime();
-        
-        // Если время задачи меньше или равно текущему — пора слать!
-        return taskTime <= now;
+      // Превращаем время из базы тоже в ЧИСЛО
+      const taskTime = new Date(r.time).getTime();
+
+      // Если время задачи меньше или равно текущему — пора слать!
+      return taskTime <= now;
     });
   }
 
@@ -136,16 +136,16 @@ class StorageService {
     // 1. Обновляем db.json
     const chat = this.getChat(chatId);
     if (chat.chatName !== name) {
-        chat.chatName = name;
-        this.save();
+      chat.chatName = name;
+      this.save();
     }
 
     // 2. Обновляем profiles.json (добавляем метку, чтобы ты глазами видел)
     if (!this.profiles[chatId]) this.profiles[chatId] = {};
     // Используем спец-ключ с нижним подчеркиванием, чтобы не путать с юзерами
     if (this.profiles[chatId]["_chatName"] !== name) {
-        this.profiles[chatId]["_chatName"] = name;
-        this.saveProfiles();
+      this.profiles[chatId]["_chatName"] = name;
+      this.saveProfiles();
     }
   }
 
@@ -154,7 +154,7 @@ class StorageService {
     const chat = this.getChat(chatId);
     // Сохраняем юзернейм или имя для поиска
     const name = user.username ? `@${user.username}` : (user.first_name || "Анон");
-    
+
     if (!chat.users[user.id] || chat.users[user.id] !== name) {
       chat.users[user.id] = name;
       this.save();
@@ -173,10 +173,10 @@ class StorageService {
     const chat = this.getChat(chatId);
     // Исправление: проверяем именно на null/undefined, чтобы цифра 0 не превращалась в 'general'
     let tid = (threadId === null || threadId === undefined) ? 'general' : threadId;
-    
+
     // Приводим все к строке для надежного сравнения
     tid = String(tid);
-    
+
     return chat.mutedTopics.some(t => String(t) === tid);
   }
 
@@ -184,9 +184,9 @@ class StorageService {
     const chat = this.getChat(chatId);
     let tid = (threadId === null || threadId === undefined) ? 'general' : threadId;
     tid = String(tid); // Сохраняем всегда как строку
-    
+
     const index = chat.mutedTopics.findIndex(t => String(t) === tid);
-    
+
     if (index > -1) {
       chat.mutedTopics.splice(index, 1);
       this.save();
@@ -203,11 +203,11 @@ class StorageService {
   getUserInstruction(username) {
     if (!username) return "";
     try {
-        if (fs.existsSync(INSTRUCTIONS_PATH)) {
-            // Читаем каждый раз заново для Hot Reload
-            const instructions = JSON.parse(fs.readFileSync(INSTRUCTIONS_PATH, 'utf-8'));
-            return instructions[username.toLowerCase()] || "";
-        }
+      if (fs.existsSync(INSTRUCTIONS_PATH)) {
+        // Читаем каждый раз заново для Hot Reload
+        const instructions = JSON.parse(fs.readFileSync(INSTRUCTIONS_PATH, 'utf-8'));
+        return instructions[username.toLowerCase()] || "";
+      }
     } catch (e) { console.error("Ошибка инструкций:", e); }
     return "";
   }
@@ -217,15 +217,15 @@ class StorageService {
   // Получить один профиль (или заглушку)
   getProfile(chatId, userId) {
     if (!this.profiles[chatId]) this.profiles[chatId] = {};
-    
+
     if (!this.profiles[chatId][userId]) {
-        // Дефолт: репутация 50
-        return { realName: null, facts: "", attitude: "Нейтральное", relationship: 50 };
+      // Дефолт: репутация 50
+      return { realName: null, facts: "", attitude: "Нейтральное", relationship: 50 };
     }
     // Если профиль есть, но поле relationship старое (нет его) — добавим 50
     const p = this.profiles[chatId][userId];
     if (typeof p.relationship === 'undefined') p.relationship = 50;
-    
+
     return p;
   }
 
@@ -233,11 +233,11 @@ class StorageService {
   getProfilesForUsers(chatId, userIds) {
     const result = {};
     if (!this.profiles[chatId]) return {};
-    
+
     userIds.forEach(uid => {
-        if (this.profiles[chatId][uid]) {
-            result[uid] = this.profiles[chatId][uid];
-        }
+      if (this.profiles[chatId][uid]) {
+        result[uid] = this.profiles[chatId][uid];
+      }
     });
     return result;
   }
@@ -245,23 +245,55 @@ class StorageService {
   // Массовое обновление (после анализа)
   bulkUpdateProfiles(chatId, updatesMap) {
     if (!this.profiles[chatId]) this.profiles[chatId] = {};
-    
+
     for (const [userId, data] of Object.entries(updatesMap)) {
-        const current = this.profiles[chatId][userId] || { realName: null, facts: "", attitude: "Нейтральное", relationship: 50 };
-        
-        if (data.realName && data.realName !== "Неизвестно") current.realName = data.realName;
-        if (data.facts) current.facts = data.facts;
-        if (data.attitude) current.attitude = data.attitude;
-        
-        // === ДОБАВЛЯЕМ ЭТУ СТРОКУ ===
-        if (data.relationship !== undefined) {
-          const score = parseInt(data.relationship, 10);
-          if (!isNaN(score)) current.relationship = score;
-     }
-        
-        this.profiles[chatId][userId] = current;
+      const current = this.profiles[chatId][userId] || { realName: null, facts: "", attitude: "Нейтральное", relationship: 50 };
+
+      if (data.realName && data.realName !== "Неизвестно") current.realName = data.realName;
+      if (data.facts) current.facts = data.facts;
+      if (data.attitude) current.attitude = data.attitude;
+
+      // === ДОБАВЛЯЕМ ЭТУ СТРОКУ ===
+      if (data.relationship !== undefined) {
+        const score = parseInt(data.relationship, 10);
+        if (!isNaN(score)) current.relationship = score;
+      }
+
+      this.profiles[chatId][userId] = current;
     }
     this.saveProfiles();
+  }
+
+  // === СОРЕВНОВАТЕЛЬНАЯ СТАТИСТИКА ===
+
+  incrementDebateWin(chatId, userId) {
+    if (!this.profiles[chatId]) this.profiles[chatId] = {};
+    const p = this.getProfile(chatId, userId);
+
+    if (!p.debateWins) p.debateWins = 0;
+    p.debateWins += 1;
+
+    this.profiles[chatId][userId] = p;
+    this.saveProfiles();
+  }
+
+  getDebateLeaderboard(chatId) {
+    if (!this.profiles[chatId]) return [];
+
+    // Превращаем объект в массив [ {name, wins}, ... ]
+    const list = Object.entries(this.profiles[chatId])
+      .filter(([key, val]) => !key.startsWith('_')) // Игнорим метаданные чата
+      .map(([uid, profile]) => {
+        const chat = this.getChat(chatId);
+        const name = profile.realName || chat.users[uid] || "Анон";
+        return { name, wins: profile.debateWins || 0 };
+      });
+
+    // Сортируем: у кого больше побед — тот выше
+    return list
+      .filter(u => u.wins > 0)
+      .sort((a, b) => b.wins - a.wins)
+      .slice(0, 10); // Топ-10
   }
 
   // Поиск профиля по тексту ("расскажи про @vetaone" или "про Виталия")
@@ -269,22 +301,22 @@ class StorageService {
     if (!this.profiles[chatId]) return null;
     const chat = this.getChat(chatId);
     const q = query.toLowerCase().replace('@', ''); // убираем собаку для поиска
-    
+
     // 1. Пробуем найти по ID, перебирая users из db.json
     for (const [uid, usernameRaw] of Object.entries(chat.users)) {
-        if (usernameRaw.toLowerCase().includes(q)) {
-            // Нашли ID по нику, возвращаем профиль (даже если он пустой, создадим на лету для ответа)
-            const p = this.getProfile(chatId, uid);
-            return { ...p, username: usernameRaw };
-        }
+      if (usernameRaw.toLowerCase().includes(q)) {
+        // Нашли ID по нику, возвращаем профиль (даже если он пустой, создадим на лету для ответа)
+        const p = this.getProfile(chatId, uid);
+        return { ...p, username: usernameRaw };
+      }
     }
 
     // 2. Если по нику не нашли, ищем внутри профилей по realName
     for (const [uid, profile] of Object.entries(this.profiles[chatId])) {
-        if (profile.realName && profile.realName.toLowerCase().includes(q)) {
-            const usernameRaw = chat.users[uid] || "Unknown";
-            return { ...profile, username: usernameRaw };
-        }
+      if (profile.realName && profile.realName.toLowerCase().includes(q)) {
+        const usernameRaw = chat.users[uid] || "Unknown";
+        return { ...profile, username: usernameRaw };
+      }
     }
 
     return null;
