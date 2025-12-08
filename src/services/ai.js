@@ -408,9 +408,25 @@ class AiService {
     };
 
     try {
-      // Передаем текст сообщения как fallback для OpenRouter
-      return await this.executeWithRetry(requestLogic, currentMessage.text);
-    } catch (e) { throw e; }
+      const result = await this.executeWithRetry(requestLogic, currentMessage.text);
+
+      // Проверяем, является ли результат объектом от executeWithRetry (OpenRouter)
+      if (typeof result === 'object' && result !== null && result.response && typeof result.response.text === 'function') {
+        return result.response.text();
+      }
+
+      // Если это уже строка (от Gemini или fallback), просто возвращаем ее
+      if (typeof result === 'string') {
+        return result;
+      }
+
+      // Если результат не является ни строкой, ни ожидаемым объектом, возвращаем fallback
+      return "Я запутался и не знаю, что ответить.";
+
+    } catch (e) {
+      console.error(`[CRITICAL AI ERROR]: ${e}`);
+      return "У меня что-то сломалось в башке. Попробуй позже.";
+    }
   }
 
   // === РЕАКЦИЯ ===
