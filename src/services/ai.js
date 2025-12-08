@@ -117,119 +117,164 @@ class AiService {
   }
 
   /**
+   * Получает текст запроса для OpenRouter
+   * @param {Function} apiCallFn - Функция для вызова API
+   * @returns {Promise<string>} Текст запроса
+   */
+  async getPromptForOpenRouter(apiCallFn) {
+    try {
+      // Пробуем выполнить оригинальный запрос, чтобы получить текст
+      const result = await apiCallFn();
+      if (result?.response?.text) {
+        const text = await result.response.text();
+        if (text) return text;
+      }
+      return 'Привет! Как дела?';
+    } catch (e) {
+      console.error('Ошибка при получении промпта для OpenRouter:', e);
+      return 'Привет! Как дела?';
+    }
+  }
+
+  /**
    * Выполняет запрос к API с повторными попытками
    * @param {Function} apiCallFn - Функция для вызова API
-   * @param {string} fallbackText - Текст для возврата в случае ошибки
+   * @param {string} [fallbackText] - Текст для возврата в случае ошибки
    * @param {Object} [context] - Контекст запроса (chatId, userId и т.д.)
-   * @returns {Promise<string>} Ответ от API или fallback-текст
+   * @returns {Promise<Object>} Ответ от API
    */
   async executeWithRetry(apiCallFn, fallbackText = null, context = {}) {
-    // Выбираем модель на основе контекста
-    const modelName = this.selectModelByContext(context);
-    if (modelName !== this.currentModel.name) {
-      this.initModel(modelName);
-    }
-    
-    // Пробуем все ключи и модели
-    for (let attempt = 0; attempt < this.keys.length * this.models.length; attempt++) {
+    const maxAttempts = this.keys.length * this.models.length * 2; // Максимальное количество попыток
+    let lastError = null;
+    const startTime = Date.now();
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const result = await apiCallFn();
-        return result;
+        // Проверяем, используем ли мы OpenRouter
+        if (this.currentModel.provider === 'openrouter') {
+          // Для OpenRouter используем специальную логику вызова
+          const prompt = await this.getPromptForOpenRouter(apiCallFn);
+          const response = await this.callOpenRouter({
+            model: this.currentModel.name,
+            messages: [
+              {
+                role: 'system',
+                content: 'Ты - Жмых, остроумный и саркастичный бот. Отвечай кратко и с юмором.'
+              },
+              {
+                role: 'user',
+                content: prompt
+              }
+            ],
+            temperature: this.currentModel.generationConfig?.temperature || 0.8,
+            max_tokens: this.currentModel.generationConfig?.max_tokens || 1000
+          });
+          return { response: { text: () => response.choices[0].message.content } };
+        } else {
+          // Для Gemini используем стандартный вызов
+          return await apiCallFn();
+        }
       } catch (error) {
         console.error(`[AI ERROR] Ошибка API (попытка ${attempt + 1}):`, error.message);
+        lastError = error;
         
-        // Проверяем, является ли ошибка ошибкой квоты
+        // Проверяем, является ли ошибка связанной с квотой
         const isQuotaError = error.status === 429 || 
-                           (error.message && error.message.includes('quota'));
+                           (error.message && error.message.includes('quota')) ||
+                           (error.response?.data?.error?.message?.includes('quota'));
         
-        // Если это ошибка квоты, переключаемся на следующую модель
-        if (isQuotaError) {
-          console.log(`[AI] Обнаружено превышение квоты для модели ${this.currentModel.name}, пробуем следующую модель...`);
+        if (isQuotaError || error.message.includes('404')) {
+          console.log(`[AI] Обнаружена ошибка для модели ${this.currentModel?.name || 'unknown'}, пробуем следующую модель...`);
           this.rotateModel();
-          // Сбрасываем индекс ключа при смене модели
-          this.keyIndex = 0;
+          this.keyIndex = 0; // Сбрасываем индекс ключа при смене модели
           continue;
         }
         
-        // Если это не последняя попытка - пробуем следующий ключ или модель
-        if (attempt < this.keys.length * this.models.length - 1) {
-          if ((attempt + 1) % this.keys.length === 0) {
-            this.rotateModel(); // Пробуем следующую модель
+        // Если это не ошибка квоты, пробуем следующий ключ
+        if (attempt < maxAttempts - 1) {
+          if (this.models.length > 1 && (attempt + 1) % this.models.length === 0) {
+            this.rotateModel();
+            this.keyIndex = 0; // Сбрасываем индекс ключа при смене модели
           } else {
-            this.rotateKey(); // Пробуем следующий ключ
+            this.rotateKey();
           }
-        } else {
-          // Если это последняя попытка и есть fallback текст, возвращаем его
-          if (fallbackText) {
-            console.log('[AI] Все попытки исчерпаны, возвращаем fallback-ответ');
-            return fallbackText;
-          }
-          throw error;
+          
+          // Экспоненциальная задержка между попытками
+          const delayMs = Math.min(1000 * Math.pow(2, attempt), 10000);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
         }
       }
     }
-
-    // Если все ключи Gemini исчерпаны, пробуем OpenRouter
-    if (config.openRouterKey && fallbackText) {
-      console.log('[AI FALLBACK] Все ключи Gemini исчерпаны, переключаюсь на OpenRouter...');
+    
+    // Если дошли сюда, значит все попытки исчерпаны
+    console.error(`[AI CRITICAL] Все попытки исчерпаны за ${(Date.now() - startTime) / 1000} сек`);
+    
+    // Если у нас есть OpenRouter ключ, пробуем его как последнее средство
+    if (config.openRouterKey && !lastError?.message?.includes('OpenRouter')) {
+      console.log('[AI] Пробуем использовать OpenRouter как запасной вариант...');
       try {
-        return await this.callOpenRouter(fallbackText);
+        const fallbackResponse = fallbackText || 'К сожалению, все модели в данный момент перегружены. Пожалуйста, попробуйте позже.';
+        const response = await this.callOpenRouter({
+          model: 'tngtech/deepseek-r1t2-chimera:free',
+          messages: [
+            { role: 'system', content: 'Ты - Жмых, остроумный и саркастичный бот.' },
+            { role: 'user', content: fallbackResponse }
+          ],
+          temperature: 0.7,
+          max_tokens: 100
+        });
+        return { response: { text: () => response.choices[0].message.content } };
       } catch (orError) {
         console.error('[OPENROUTER ERROR]:', orError.message);
-        throw new Error("Все ключи Gemini исчерпали лимит, OpenRouter тоже не ответил!");
+        throw new Error("Все ключи и модели исчерпали лимит!");
       }
     }
 
-    throw new Error("Все ключи Gemini исчерпали лимит!");
+    throw lastError || new Error("Все ключи и модели исчерпали лимит!");
   }
 
-  async callOpenRouter(userMessage) {
+  async callOpenRouter(requestData) {
     if (!config.openRouterKey) {
-      throw new Error('OPENROUTER_API_KEY не задан в переменных окружения!');
+      throw new Error('OPENROUTER_API_KEY не задан в конфигурации!');
     }
 
-    const models = [
-      'tngtech/deepseek-r1t2-chimera:free',
-      'google/gemini-2.0-flash-exp:free'
-    ];
-
-    let lastError = null;
-
-    for (const model of models) {
-      console.log(`[OPENROUTER] Пробую модель: ${model}`);
-
-      try {
-        const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-          model: model,
-          messages: [
-            { role: 'system', content: prompts.system() },
-            { role: 'user', content: userMessage }
-          ],
-          temperature: 0.9,
-          max_tokens: 2000
-        }, {
+    try {
+      const response = await axios.post(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          model: requestData.model,
+          messages: requestData.messages,
+          temperature: requestData.temperature,
+          max_tokens: requestData.max_tokens,
+          // Добавляем дополнительные параметры для лучшей совместимости
+          top_p: 0.9,
+          frequency_penalty: 0,
+          presence_penalty: 0,
+          stop: null
+        },
+        {
           headers: {
             'Authorization': `Bearer ${config.openRouterKey}`,
-            'Content-Type': 'application/json',
             'HTTP-Referer': 'https://github.com/MrReason148-8/Zhmykh-bot',
-            'X-Title': 'Zhmykh Bot'
-          }
-        });
-
-        console.log(`[OPENROUTER] ✓ Модель ${model} ответила успешно`);
-        return response.data.choices[0].message.content;
-      } catch (error) {
-        console.error(`[OPENROUTER] ✗ Модель ${model} упала:`, {
-          status: error.response?.status,
-          data: error.response?.data?.error
-        });
-        lastError = error;
-        continue;
-      }
+            'X-Title': 'Zhmykh Bot',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          timeout: 30000 // 30 секунд таймаут
+        }
+      );
+      return response.data;
+    } catch (error) {
+      const errorMessage = error.response?.data?.error?.message || error.message;
+      console.error('OpenRouter API Error:', errorMessage);
+      
+      // Создаем более информативное сообщение об ошибке
+      const enhancedError = new Error(`Ошибка OpenRouter: ${errorMessage}`);
+      enhancedError.status = error.response?.status;
+      enhancedError.response = error.response?.data;
+      
+      throw enhancedError;
     }
-
-    console.error('[OPENROUTER] Все модели исчерпаны!');
-    throw lastError || new Error('Все модели OpenRouter не ответили');
   }
 
   getCurrentTime() {
@@ -295,20 +340,38 @@ class AiService {
 
       console.log(`[DEBUG AI] Отправляю запрос...`);
 
-      // !!! ВОТ ТУТ ГЛАВНОЕ ИЗМЕНЕНИЕ !!!
-      // Переопределяем конфиг ТОЛЬКО для этого запроса.
-      // maxOutputTokens: 1000 — это примерно 1 длинное сообщение в Telegram.
-      // Это не даст ему генерировать бесконечные статьи.
-      const result = await this.model.generateContent({
-        contents: [{ role: 'user', parts: promptParts }],
-        generationConfig: {
-          maxOutputTokens: 2500,
-          temperature: 0.9
-        }
-      });
-
-      const response = result.response;
-      let text = response.text();
+      let text = '';
+      
+      // Проверяем, используем ли мы OpenRouter
+      if (this.currentModel.provider === 'openrouter') {
+        const response = await this.callOpenRouter({
+          model: this.currentModel.name,
+          messages: [
+            {
+              role: 'system',
+              content: 'Ты - Жмых, остроумный и саркастичный бот. Отвечай кратко и с юмором.'
+            },
+            {
+              role: 'user',
+              content: promptParts.map(p => p.text).join('\n')
+            }
+          ],
+          temperature: 0.8,
+          max_tokens: 1000
+        });
+        text = response.choices[0].message.content;
+      } else {
+        // Используем Gemini API для других провайдеров
+        const result = await this.model.generateContent({
+          contents: [{ role: 'user', parts: promptParts }],
+          generationConfig: {
+            maxOutputTokens: 2500,
+            temperature: 0.9
+          }
+        });
+        const response = result.response;
+        text = response.text();
+      }
 
       // === CLEANUP (ОБЯЗАТЕЛЬНО!) ===
       // Убираем только технический мусор, не трогая текст сообщения
