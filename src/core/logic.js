@@ -203,10 +203,22 @@ const processMessage = async (bot, msg) => {
     // Задержка ответа в зависимости от кармы
     await delayResponse(profile);
     
-    // Получаем ответ от ИИ с учетом контекста
-    let aiResponse;
-    try {
-      aiResponse = await ai.getResponse(text, context);
+    // Получаем ответ от ИИ, только если есть текст
+    if (text) {
+      let aiResponse;
+      try {
+        // Формируем объект currentMessage для передачи в getResponse
+        const currentMessage = {
+          text: text,
+          sender: msg.from.first_name || 'Пользователь',
+          replyText: msg.reply_to_message?.text || null
+        };
+
+        // Получаем историю чата
+        const history = chatHistory[chatId] || [];
+
+        // Правильный вызов getResponse
+        aiResponse = await ai.getResponse(history, currentMessage, null, null, null, profile);
       
       // === ФОРМАТИРОВАНИЕ И ОТПРАВКА ===
       
@@ -259,13 +271,12 @@ const processMessage = async (bot, msg) => {
       if (!chatHistory[chatId]) {
         chatHistory[chatId] = [];
       }
-      chatHistory[chatId].push({
-        role: 'assistant',
-        text: aiResponse,
-        timestamp: new Date().toISOString()
-      });
-      
-    } catch (err) {
+        chatHistory[chatId].push({
+          role: 'assistant',
+          text: aiResponse,
+          timestamp: new Date().toISOString()
+        });
+      } catch (err) {
       console.error("[CRITICAL AI ERROR]:", err);
       
       // Отправляем уведомление админу
@@ -281,6 +292,7 @@ const processMessage = async (bot, msg) => {
         console.error("Не удалось отправить сообщение об ошибке пользователю:", e);
       }
     }
+  } // <--- Вот здесь закрывается блок if (text)
 
     // === ПАССИВНЫЙ АНАЛИЗАТОР (Observer) ===
     // Собираем сообщения в буфер для пакетного анализа (раз в 20 сообщений)
