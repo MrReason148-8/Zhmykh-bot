@@ -155,6 +155,19 @@ class StorageService {
    * @returns {Object} Профиль пользователя
    */
   getProfile(chatId, userId, isFirstMessage = false) {
+    // Специальная логика для админа
+    if (userId === config.adminId) {
+      const adminProfile = { 
+        ...DEFAULT_PROFILE, 
+        relationship: 100, 
+        realName: 'Админ',
+        isFirstInteraction: false
+      };
+      // Возвращаем профиль админа, не сохраняя его в базу, 
+      // чтобы не перезаписывать реальные данные, если они есть
+      return adminProfile;
+    }
+
     // Инициализация чата, если его нет
     if (!this.profiles[chatId]) {
       this.profiles[chatId] = {};
