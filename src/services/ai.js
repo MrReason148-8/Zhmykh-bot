@@ -130,13 +130,26 @@ class AiService {
       this.initModel(modelName);
     }
     
-    // Пробуем все ключи Gemini и модели
+    // Пробуем все ключи и модели
     for (let attempt = 0; attempt < this.keys.length * this.models.length; attempt++) {
       try {
         const result = await apiCallFn();
         return result;
       } catch (error) {
-        console.error(`[AI ERROR] Ошибка API (попытка ${attempt + 1}):`, error);
+        console.error(`[AI ERROR] Ошибка API (попытка ${attempt + 1}):`, error.message);
+        
+        // Проверяем, является ли ошибка ошибкой квоты
+        const isQuotaError = error.status === 429 || 
+                           (error.message && error.message.includes('quota'));
+        
+        // Если это ошибка квоты, переключаемся на следующую модель
+        if (isQuotaError) {
+          console.log(`[AI] Обнаружено превышение квоты для модели ${this.currentModel.name}, пробуем следующую модель...`);
+          this.rotateModel();
+          // Сбрасываем индекс ключа при смене модели
+          this.keyIndex = 0;
+          continue;
+        }
         
         // Если это не последняя попытка - пробуем следующий ключ или модель
         if (attempt < this.keys.length * this.models.length - 1) {
@@ -146,6 +159,11 @@ class AiService {
             this.rotateKey(); // Пробуем следующий ключ
           }
         } else {
+          // Если это последняя попытка и есть fallback текст, возвращаем его
+          if (fallbackText) {
+            console.log('[AI] Все попытки исчерпаны, возвращаем fallback-ответ');
+            return fallbackText;
+          }
           throw error;
         }
       }
