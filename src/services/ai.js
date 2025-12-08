@@ -342,9 +342,11 @@ class AiService {
 
       let text = '';
       
+      let response; // Объявляем переменную response здесь, чтобы она была доступна в скоупе
+      
       // Проверяем, используем ли мы OpenRouter
       if (this.currentModel.provider === 'openrouter') {
-        const response = await this.callOpenRouter({
+        const openRouterResponse = await this.callOpenRouter({
           model: this.currentModel.name,
           messages: [
             {
@@ -359,7 +361,13 @@ class AiService {
           temperature: 0.8,
           max_tokens: 1000
         });
-        text = response.choices[0].message.content;
+        text = openRouterResponse.choices[0].message.content;
+        // Создаем совместимый объект response для OpenRouter
+        response = {
+          candidates: [{
+            groundingMetadata: null
+          }]
+        };
       } else {
         // Используем Gemini API для других провайдеров
         const result = await this.model.generateContent({
@@ -369,7 +377,7 @@ class AiService {
             temperature: 0.9
           }
         });
-        const response = result.response;
+        response = result.response;
         text = response.text();
       }
 
