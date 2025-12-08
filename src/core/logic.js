@@ -444,6 +444,7 @@ async function analyzeSentiment(messages) {
 // Экспортируем функции
 module.exports = { 
   processMessage,
+  chatHistory, // Экспортируем историю чата
   karmaUtils, // Экспортируем для тестирования
   processBuffer, // Экспортируем для тестирования
   analyzeSentiment // Экспортируем для тестирования

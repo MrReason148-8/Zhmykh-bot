@@ -100,6 +100,14 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Обработка команды /summary
+  if (msg.text && msg.text.startsWith('/summary')) {
+    const history = logic.chatHistory[chatId] || [];
+    const summary = await ai.getDailySummary(history);
+    await bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
+    return;
+  }
+
   // Дальше идет обычная логика...
   await logic.processMessage(bot, msg);
 });
