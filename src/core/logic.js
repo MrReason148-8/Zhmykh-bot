@@ -217,8 +217,8 @@ const processMessage = async (bot, msg) => {
         // Получаем историю чата
         const history = chatHistory[chatId] || [];
 
-        // Правильный вызов getResponse
-        aiResponse = await ai.getResponse(history, currentMessage, null, null, null, profile);
+        // Правильный вызов getResponse (profile на 6-й позиции)
+        aiResponse = await ai.getResponse(history, currentMessage, null, null, "", profile);
       
       // === ФОРМАТИРОВАНИЕ И ОТПРАВКА ===
       
