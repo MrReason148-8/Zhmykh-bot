@@ -238,8 +238,10 @@ class AiService {
         promptParts.push({ text: "Проанализируй этот файл. Опиши, что там, или ответь на вопрос по нему." });
       }
 
-      const relevantHistory = history.slice(-20);
-      const contextStr = relevantHistory.map(m => `${m.role}: ${m.text}`).join('\n');
+      // Проверяем, что history является массивом, иначе используем пустой массив
+      const safeHistory = Array.isArray(history) ? history : [];
+      const relevantHistory = safeHistory.slice(-20);
+      const contextStr = relevantHistory.map(m => `${m?.role || 'user'}: ${m?.text || ''}`).filter(Boolean).join('\n');
 
       let personalInfo = "";
       let replyContext = "";
