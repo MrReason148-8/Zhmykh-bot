@@ -13,33 +13,31 @@ while (process.env[`GOOGLE_GEMINI_API_KEY_${i}`]) {
 
 console.log(`[CONFIG] Загружено ключей Gemini: ${geminiKeys.length}`);
 
+// Проверяем наличие ключа OpenRouter
+const openRouterKey = process.env.OPENROUTER_API_KEY;
+if (openRouterKey) {
+  console.log('[CONFIG] OpenRouter API ключ загружен');
+} else {
+  console.warn('[CONFIG] ВНИМАНИЕ: OpenRouter API ключ не найден в .env файле');
+}
+
 module.exports = {
   telegramToken: process.env.TELEGRAM_BOT_TOKEN || process.env.TG_KEY,
   botId: parseInt((process.env.TELEGRAM_BOT_TOKEN || process.env.TG_KEY || "").split(':')[0], 10),
   adminId: parseInt(process.env.ADMIN_USER_ID, 10),
 
+  // API ключи
   geminiKeys: geminiKeys,
+  openRouterKey: openRouterKey,
 
   // === НАСТРОЙКИ МОДЕЛЕЙ ===
   
   // Ротация моделей (в порядке приоритета)
   modelRotation: [
     {
-      name: 'gemini-2.0-flash-exp',
-      provider: 'gemini',
-      priority: 'high',
-      generationConfig: {
-        maxOutputTokens: 2000,
-        temperature: 0.7,
-        topP: 0.95,
-        topK: 40
-      },
-      tools: [{ googleSearch: {}}]
-    },
-    {
       name: 'deepseek-ai/deepseek-chat',
       provider: 'openrouter',
-      priority: 'default',
+      priority: 'high',
       generationConfig: {
         max_tokens: 2000,
         temperature: 0.8,
