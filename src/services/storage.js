@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const debounce = require('lodash.debounce');
+const config = require('../config'); // <--- Добавляем импорт конфига
 
 // Константы путей
 const DB_PATH = path.join(__dirname, '../../data/db.json');
