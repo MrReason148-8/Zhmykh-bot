@@ -335,8 +335,8 @@ class AiService {
       text = text.replace(/```json/g, '').replace(/```/g, '').trim(); // Маркдаун обертки
       // ==============================
 
-      // --- ИСТОЧНИКИ ---
-      if (response.candidates && response.candidates[0].groundingMetadata) {
+      // --- ИСТОЧНИКИ (только для Gemini) ---
+      if (this.currentModel.provider !== 'openrouter' && response.candidates && response.candidates[0]?.groundingMetadata) {
         const metadata = response.candidates[0].groundingMetadata;
         if (metadata.groundingChunks) {
           const links = [];
