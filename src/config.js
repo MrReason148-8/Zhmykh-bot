@@ -35,7 +35,7 @@ module.exports = {
   // Ротация моделей (в порядке приоритета)
   modelRotation: [
     {
-      name: 'deepseek-ai/deepseek-chat',
+      name: 'tngtech/deepseek-r1t2-chimera:free',
       provider: 'openrouter',
       priority: 'high',
       generationConfig: {
