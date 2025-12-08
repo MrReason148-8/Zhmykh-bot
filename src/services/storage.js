@@ -255,6 +255,35 @@ class StorageService {
     return updatedProfiles;
   }
 
+  // === НАПОМИНАНИЯ ===
+
+  /**
+   * Добавляет новое напоминание
+   * @param {Object} task - Объект напоминания
+   */
+  addReminder(task) {
+    this.data.reminders.push(task);
+    this.saveDebounced();
+  }
+
+  /**
+   * Возвращает все просроченные напоминания
+   * @returns {Array<Object>} Массив напоминаний
+   */
+  getPendingReminders() {
+    const now = Date.now();
+    return this.data.reminders.filter(r => new Date(r.time).getTime() <= now);
+  }
+
+  /**
+   * Удаляет напоминания по их ID
+   * @param {Array<string>} ids - Массив ID для удаления
+   */
+  removeReminders(ids) {
+    this.data.reminders = this.data.reminders.filter(r => !ids.includes(r.id));
+    this.saveDebounced();
+  }
+
   // === ИНСТРУКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ===
 
   /**
