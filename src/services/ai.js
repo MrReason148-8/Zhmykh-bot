@@ -283,16 +283,28 @@ class AiService {
         personalInfo += `\n--- ДОСЬЕ ---\nФакты: ${userProfile.facts || "Нет"}\n${relationText}\n-----------------\n`;
       }
 
-      const fullPromptText =
-        prompts.mainChat({
-          time: this.getCurrentTime(),
-          isSpontaneous: isSpontaneous,
-          userMessage: currentMessage.text,
-          replyContext: replyContext,
-          history: contextStr,
-          personalInfo: personalInfo,
-          senderName: currentMessage.sender
+      // Проверяем, не просят ли объяснить предыдущую спонтанную реакцию
+      const lastBotMessage = history.length > 0 ? history[history.length - 1] : null;
+      const isAskingToExplain = /что смешного|почему смешно|объясни/i.test(currentMessage.text) && lastBotMessage?.type === 'spontaneous_reaction';
+
+      let fullPromptText;
+      if (isAskingToExplain) {
+        fullPromptText = prompts.explainJoke({ 
+          history: contextStr, 
+          joke: lastBotMessage.text 
         });
+      } else {
+        fullPromptText =
+          prompts.mainChat({
+            time: this.getCurrentTime(),
+            isSpontaneous: isSpontaneous,
+            userMessage: currentMessage.text,
+            replyContext: replyContext,
+            history: contextStr,
+            personalInfo: personalInfo,
+            senderName: currentMessage.sender
+          });
+      }
 
       promptParts.push({ text: fullPromptText });
 
@@ -361,6 +373,31 @@ class AiService {
       console.error(`[CRITICAL AI ERROR]: ${e.message}`);
       return "У меня что-то сломалось в башке. Попробуй позже.";
     }
+  }
+
+  // === СПОНТАННАЯ МЫСЛЬ ===
+  async getSpontaneousThought(history) {
+    const requestLogic = async () => {
+      const historyText = history.map(m => `${m.role}: ${m.text}`).join('\n');
+      const result = await this.model.generateContent(prompts.spontaneousThought(historyText));
+      let text = result.response.text().trim();
+      if (text.toUpperCase() === 'NULL') return null;
+      return text;
+    };
+    try { return await this.executeWithRetry(requestLogic); } catch (e) { return null; }
+  }
+
+  // === СПОНТАННАЯ РЕАКЦИЯ ===
+  async getSpontaneousReaction(history) {
+    const requestLogic = async () => {
+      const historyText = history.map(m => `${m.role}: ${m.text}`).join('\n');
+      const result = await this.model.generateContent(prompts.spontaneousReaction(historyText));
+      let text = result.response.text().trim();
+      const match = text.match(/(\p{Emoji_Presentation}|\p{Extended_Pictographic})/u);
+      if (match && text.toUpperCase().includes('YES')) return match[0];
+      return null;
+    };
+    try { return await this.executeWithRetry(requestLogic); } catch (e) { return null; }
   }
 
   // === РЕАКЦИЯ ===

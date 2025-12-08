@@ -6,6 +6,7 @@ const axios = require('axios');
 const { exec } = require('child_process');
 const chatHistory = {};
 const analysisBuffers = {};
+const messageCounter = {}; // Счетчик сообщений для спонтанных мыслей
 const BUFFER_SIZE = 20;
 
 // Кэш для хранения временных данных
@@ -271,11 +272,29 @@ const processMessage = async (bot, msg) => {
       if (!chatHistory[chatId]) {
         chatHistory[chatId] = [];
       }
-        chatHistory[chatId].push({
-          role: 'assistant',
-          text: aiResponse,
-          timestamp: new Date().toISOString()
-        });
+      chatHistory[chatId].push({
+        role: 'assistant',
+        text: aiResponse,
+        timestamp: new Date().toISOString()
+      });
+
+      // Определяем вероятность реакции
+      const hasExistingReactions = msg.reactions && msg.reactions.length > 0;
+      const reactionChance = hasExistingReactions ? 0.7 : 0.2;
+
+      // Пытаемся поставить реакцию с учетом вероятности
+      if (Math.random() < reactionChance) {
+        try {
+          // Анализируем текст пользователя, а не ответ бота
+          const reaction = await ai.determineReaction(text);
+          if (reaction) {
+            await bot.setMessageReaction(chatId, msg.message_id, { reaction: reaction, is_big: false });
+          }
+        } catch (reactErr) {
+          console.error("[REACTION ERROR]", reactErr.message);
+        }
+      }
+
       } catch (err) {
       console.error("[CRITICAL AI ERROR]:", err);
       
@@ -293,6 +312,41 @@ const processMessage = async (bot, msg) => {
       }
     }
   } // <--- Вот здесь закрывается блок if (text)
+
+    // === СПОНТАННАЯ РЕАКЦИЯ (с вероятностью 10%) ===
+    if (Math.random() < 0.1) {
+      try {
+        const history = chatHistory[chatId] || [];
+        const reaction = await ai.getSpontaneousReaction(history);
+        if (reaction) {
+          await bot.sendMessage(chatId, reaction);
+          // Запоминаем, что последним действием была спонтанная реакция
+          if (!chatHistory[chatId]) chatHistory[chatId] = [];
+          chatHistory[chatId].push({ role: 'assistant', text: reaction, type: 'spontaneous_reaction' });
+        }
+      } catch (spontErr) {
+        console.error("[SPONTANEOUS REACTION ERROR]", spontErr.message);
+      }
+    }
+
+    // === СПОНТАННАЯ МЫСЛЬ ===
+    if (!messageCounter[chatId]) messageCounter[chatId] = 0;
+    messageCounter[chatId]++;
+
+    // Проверяем, не пора ли вставить свое слово (раз в 30-50 сообщений)
+    if (messageCounter[chatId] > (30 + Math.random() * 20)) {
+      try {
+        const history = chatHistory[chatId] || [];
+        const thought = await ai.getSpontaneousThought(history);
+        if (thought) {
+          await bot.sendMessage(chatId, thought);
+          chatHistory[chatId].push({ role: 'assistant', text: thought, type: 'spontaneous_thought' });
+        }
+      } catch (thoughtErr) {
+        console.error("[SPONTANEOUS THOUGHT ERROR]", thoughtErr.message);
+      }
+      messageCounter[chatId] = 0; // Сбрасываем счетчик
+    }
 
     // === ПАССИВНЫЙ АНАЛИЗАТОР (Observer) ===
     // Собираем сообщения в буфер для пакетного анализа (раз в 20 сообщений)
