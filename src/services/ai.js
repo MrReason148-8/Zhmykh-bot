@@ -227,8 +227,9 @@ class AiService {
   }
 
   // === ОСНОВНОЙ ОТВЕТ ===
-  async getResponse(history, currentMessage, imageBuffer = null, mimeType = "image/jpeg", userInstruction = "", userProfile = null, isSpontaneous = false) {
-    console.log(`[DEBUG AI] getResponse вызван. Текст: ${currentMessage.text.slice(0, 20)}...`);
+  async getResponse(history, currentMessage = {}, imageBuffer = null, mimeType = "image/jpeg", userInstruction = "", userProfile = null, isSpontaneous = false) {
+    const messageText = currentMessage?.text || '';
+    console.log(`[DEBUG AI] getResponse вызван. Текст: ${messageText ? messageText.slice(0, 20) + '...' : 'нет текста'}`);
     const requestLogic = async () => {
       let promptParts = [];
 
