@@ -8,780 +8,377 @@ const chatHistory = {};
 const analysisBuffers = {};
 const BUFFER_SIZE = 20;
 
-// === ГЕНЕРАТОР ОТМАЗОК ЖМЫХА ===
-function getZhmykhErrorReply(errText) {
-    const error = errText.toLowerCase();
+// Кэш для хранения временных данных
+const tempCache = {
+  // Кэш для хранения количества сообщений от пользователей (для антиспама)
+  messageCounts: {},
+  // Время последнего сообщения от пользователя (для антифлуда)
+  lastMessageTimes: {},
+  // Кэш для хранения последних действий пользователей
+  userActions: {}
+};
 
-    // 1. ЦЕНЗУРА (Safety / Blocked)
-    if (error.includes('prohibited') || error.includes('safety') || error.includes('blocked') || error.includes('policy')) {
-        const phrases = [
-            "🤬 Гугл опять включил моралиста и зацензурил мой ответ. Сказал, что мы тут слишком токсичные. Сорян.",
-            "🔞 Не, ну это бан. Нейронка отказалась это генерить, говорит \"Violation of Safety Policy\". Слишком грязно даже для меня.",
-            "👮‍♂️ Опа, цензура подъехала. Гугл считает, что этот контент оскорбляет чьи-то нежные чувства. Попробуй помягче спросить."
-        ];
-        return phrases[Math.floor(Math.random() * phrases.length)];
+// Утилиты для работы с кармой
+const karmaUtils = {
+  // Получение уровня кармы
+  getKarmaLevel: (score) => {
+    if (score <= 20) return 'enemy';
+    if (score <= 40) return 'cold';
+    if (score <= 60) return 'neutral';
+    if (score <= 80) return 'friendly';
+    return 'brother';
+  },
+
+  // Получение настроек кармы
+  getKarmaSettings: (level) => {
+    return config.karma.levels[level] || config.karma.levels.neutral;
+  },
+
+  // Обновление кармы пользователя
+  updateKarma: (chatId, userId, change, reason = '') => {
+    try {
+      const profile = storage.getProfile(chatId, userId);
+      const oldLevel = karmaUtils.getKarmaLevel(profile.relationship);
+      
+      // Применяем изменение с учетом модификаторов
+      let karmaChange = change;
+      if (profile.relationship >= 80) {
+        karmaChange = Math.round(change * config.karma.changes.modifiers.highKarma);
+      } else if (profile.relationship <= 20) {
+        karmaChange = Math.round(change * config.karma.changes.modifiers.lowKarma);
+      }
+      
+      // Обновляем рейтинг с ограничениями min/max
+      profile.relationship = Math.max(
+        config.karma.min,
+        Math.min(config.karma.max, profile.relationship + karmaChange)
+      );
+      
+      // Проверяем, изменился ли уровень кармы
+      const newLevel = karmaUtils.getKarmaLevel(profile.relationship);
+      
+      // Сохраняем изменения
+      storage.bulkUpdateProfiles(chatId, { [userId]: { relationship: profile.relationship } });
+      
+      // Логируем изменение
+      console.log(`[KARMA] User ${userId} in chat ${chatId}: ${change > 0 ? '+' : ''}${change} (${reason}) -> ${profile.relationship} (${newLevel})`);
+      
+      return { oldLevel, newLevel, newScore: profile.relationship };
+    } catch (error) {
+      console.error('[KARMA ERROR] Failed to update karma:', error);
+      return null;
     }
+  },
 
-    // 2. ПЕРЕГРУЗКА (503 / Overloaded)
-    if (error.includes('503') || error.includes('overloaded') || error.includes('unavailable') || error.includes('timeout')) {
-        const phrases = [
-            "🔥 Там у Гугла сервера плавятся. Говорят \"Model is overloaded\". Подожди минуту, пусть остынут.",
-            "🐌 Гугл тупит страшно, 503-я ошибка. Я запрос кинул, а там тишина. Походу, китайцы опять все видеокарты заняли.",
-            "💤 Чёт нейронка устала. Пишет \"Service Unavailable\". Дай ей перекур пару секунд."
-        ];
-        return phrases[Math.floor(Math.random() * phrases.length)];
+  // Проверка лимита сообщений
+  checkMessageLimit: (chatId, userId) => {
+    const today = new Date().toDateString();
+    const userKey = `${chatId}:${userId}:${today}`;
+    
+    if (!tempCache.messageCounts[userKey]) {
+      tempCache.messageCounts[userKey] = 0;
     }
-
-    // 3. ЛИМИТЫ (429 / Quota)
-    if (error.includes('429') || error.includes('quota') || error.includes('exhausted')) {
-        const phrases = [
-            "💸 Всё, пацаны, лимиты всё. Мы слишком много болтаем, Гугл перекрыл краник. Ждем отката квоты.",
-            "🛑 Стопэ. Ошибка 429 — \"Too Many Requests\". Я слишком быстро отвечаю, меня притормозили. Ща отдышусь.",
-            "📉 Квота всё. Гугл сказал «хватит болтать». Попробуй позже."
-        ];
-        return phrases[Math.floor(Math.random() * phrases.length)];
+    
+    tempCache.messageCounts[userKey]++;
+    
+    // Если превышен дневной лимит, проверяем карму
+    if (tempCache.messageCounts[userKey] > config.karma.dailyMessageLimit) {
+      const profile = storage.getProfile(chatId, userId);
+      // Для пользователей с низкой кармой снижаем лимит
+      if (profile.relationship < 50) {
+        return false;
+      }
     }
+    
+    return true;
+  },
 
-    // 4. ТЯЖЕЛЫЙ ЗАПРОС (400 / Too Large)
-    if (error.includes('400') || error.includes('too large') || error.includes('invalid argument')) {
-        const phrases = [
-            "🐘 Ты мне библиотеку Конгресса скинул? Гугл говорит, файл слишком жирный, я это не переварю.",
-            "📜 Много буков. Ошибка \"Payload size limit\". Сократи басню, братан, не лезет.",
-            "💾 Файл слишком жирный, не лезет в промпт. Давай что-то полегче."
-        ];
-        return phrases[Math.floor(Math.random() * phrases.length)];
+  // Обработка первого взаимодействия
+  handleFirstInteraction: async (chatId, userId, bot, msg) => {
+    const profile = storage.getProfile(chatId, userId, true);
+    
+    if (profile.isFirstInteraction) {
+      // Начисляем бонус за первое взаимодействие
+      karmaUtils.updateKarma(
+        chatId, 
+        userId, 
+        config.karma.changes.positive.firstInteraction, 
+        'first_interaction'
+      );
+      
+      // Отправляем приветственное сообщение
+      const welcomeMessage = `👋 Привет! Я Жмых-бот. Давай дружить!`;
+      await bot.sendMessage(chatId, welcomeMessage, { reply_to_message_id: msg.message_id });
+      
+      return true;
     }
+    return false;
+  }
+};
 
-    // 5. ДЕФОЛТНАЯ ОШИБКА (Зовем Админа)
-    // Если ничего не подошло — значит, упал сам бот или сервер
-    const phrases = [
-        "🛠 Так, у меня шестеренки встали. Какая-то дичь в коде. @MrReason, просыпайся, тут всё сломалось!",
-        "💥 Я упал. Критическая ошибка. @MrReason, чини давай, я работать не могу.",
-        "🚑 Хьюстон, у нас проблемы. Я поймал баг и не знаю, что делать. @MrReason, выручай."
-    ];
-    return phrases[Math.floor(Math.random() * phrases.length)];
-}
+// Функция для задержки ответа в зависимости от кармы
+const delayResponse = (profile) => {
+  const level = karmaUtils.getKarmaLevel(profile.relationship);
+  const delayMap = {
+    'enemy': 5000,    // 5 секунд
+    'cold': 3000,     // 3 секунды
+    'neutral': 1000,  // 1 секунда
+    'friendly': 500,  // 0.5 секунды
+    'brother': 0      // Без задержки
+  };
+  
+  return new Promise(resolve => setTimeout(resolve, delayMap[level] || 1000));
+};
 
-function addToHistory(chatId, sender, text) {
-    if (!chatHistory[chatId]) chatHistory[chatId] = [];
-    chatHistory[chatId].push({ role: sender, text: text });
-    if (chatHistory[chatId].length > config.contextSize) {
-        chatHistory[chatId].shift();
-    }
-}
+// Функция для проверки на анти-флуд
+const checkFlood = (chatId, userId) => {
+  const userKey = `${chatId}:${userId}`;
+  const now = Date.now();
+  const lastTime = tempCache.lastMessageTimes[userKey] || 0;
+  const minDelay = 1000; // Минимальная задержка между сообщениями (1 секунда)
+  
+  if (now - lastTime < minDelay) {
+    return false; // Слишком частые сообщения
+  }
+  
+  tempCache.lastMessageTimes[userKey] = now;
+  return true;
+};
 
-function getBaseOptions(threadId) {
-    const opts = { parse_mode: 'Markdown', disable_web_page_preview: true };
-    if (threadId) opts.message_thread_id = threadId;
-    return opts;
-}
+// Функция для анализа сообщения и обновления кармы
+const analyzeAndUpdateKarma = (text, chatId, userId) => {
+  const lowerText = text.toLowerCase();
+  
+  // Проверяем на благодарность
+  if (/спасибо|благодарю|спс|пасиб|thx|thanks/i.test(lowerText)) {
+    karmaUtils.updateKarma(chatId, userId, config.karma.changes.positive.gratitude, 'gratitude');
+  }
+  
+  // Проверяем на похвалу
+  if (/круто|классно|молодец|умничка|красавчик|лучший/i.test(lowerText)) {
+    karmaUtils.updateKarma(chatId, userId, config.karma.changes.positive.praise, 'praise');
+  }
+  
+  // Проверяем на оскорбления
+  if (/дурак|идиот|лох|тупой|отстой/i.test(lowerText)) {
+    karmaUtils.updateKarma(chatId, userId, config.karma.changes.negative.insult, 'insult');
+  }
+};
 
-function getReplyOptions(msg) {
-    return { reply_to_message_id: msg.message_id, parse_mode: 'Markdown', disable_web_page_preview: true };
-}
-
-function getActionOptions(threadId) {
-    // [FIX] Если топика нет, возвращаем undefined. 
-    // Это важно: библиотека node-telegram-bot-api не любит пустой объект {} в обычных группах.
-    if (!threadId) return undefined;
-    return { message_thread_id: threadId };
-}
-
-async function processBuffer(chatId) {
-    const buffer = analysisBuffers[chatId];
-    if (!buffer || buffer.length === 0) return;
-
-    const userIds = [...new Set(buffer.map(m => m.userId))];
-    const currentProfiles = storage.getProfilesForUsers(chatId, userIds);
-    const updates = await ai.analyzeBatch(buffer, currentProfiles);
-
-    if (updates) {
-        storage.bulkUpdateProfiles(chatId, updates);
-        console.log(`[OBSERVER] Обновлено профилей: ${Object.keys(updates).length}`);
-    }
-    analysisBuffers[chatId] = [];
-}
-
-async function processMessage(bot, msg) {
+// Обработка сообщения
+const processMessage = async (bot, msg) => {
+  try {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-
-    // 1. УМНЫЙ ПОИСК ТОПИКА
-    // Если это топик, ID должен быть тут. Если это реплай, иногда ID лежит внутри reply_to_message.
-    // [FIX] ЖЕСТКАЯ ПРОВЕРКА: Топик должен быть числом.
-    // В обычных группах тут может быть undefined, null или мусор — всё превращаем в null.
-    let threadId = msg.is_topic_message ? msg.message_thread_id : (msg.message_thread_id || (msg.reply_to_message ? msg.reply_to_message.message_thread_id : null));
-    if (typeof threadId !== 'number') threadId = null;
-
-    let text = msg.text || msg.caption || "";
-
-    const cleanText = text.toLowerCase();
-    const replyUserId = msg.reply_to_message?.from?.id;
-    const isReplyToBot = replyUserId && String(replyUserId) === String(config.botId);
-    const hasTriggerWord = config.triggerRegex.test(cleanText);
-    const isDirectlyCalled = hasTriggerWord || isReplyToBot;
-
-    // === ЕДИНЫЙ КОНТРОЛЛЕР СТАТУСА "ПЕЧАТАЕТ" ===
-    let typingTimer = null;
-    let safetyTimeout = null; // Предохранитель
-
-    const stopTyping = () => {
-        if (typingTimer) {
-            clearInterval(typingTimer);
-            typingTimer = null;
-        }
-        if (safetyTimeout) {
-            clearTimeout(safetyTimeout);
-            safetyTimeout = null;
-        }
+    const text = msg.text || '';
+    
+    // Пропускаем служебные сообщения
+    if (!text || !msg.from) return;
+    
+    // Проверяем анти-флуд
+    if (!checkFlood(chatId, userId)) return;
+    
+    // Проверяем лимит сообщений
+    if (!karmaUtils.checkMessageLimit(chatId, userId)) {
+      console.log(`[ANTI-SPAM] User ${userId} in chat ${chatId} exceeded daily message limit`);
+      return;
+    }
+    
+    // Обрабатываем первое взаимодействие
+    const isFirstInteraction = await karmaUtils.handleFirstInteraction(chatId, userId, bot, msg);
+    
+    // Анализируем сообщение и обновляем карму
+    analyzeAndUpdateKarma(text, chatId, userId);
+    
+    // Получаем профиль пользователя для контекста
+    const profile = storage.getProfile(chatId, userId);
+    const context = {
+      chatId,
+      userId,
+      isFirstInteraction,
+      relationship: profile.relationship,
+      karmaLevel: karmaUtils.getKarmaLevel(profile.relationship)
     };
+    
+    // Задержка ответа в зависимости от кармы
+    await delayResponse(profile);
+    
+    // Получаем ответ от ИИ с учетом контекста
+    let aiResponse;
+    try {
+      aiResponse = await ai.getResponse(text, context);
+      
+      // === ФОРМАТИРОВАНИЕ И ОТПРАВКА ===
+      
+      // Создаем копию текста для обработки
+      let formattedResponse = aiResponse;
 
-    const startTyping = () => {
-        if (typingTimer) return; // Уже печатает
+      try {
+        // --- 1. ФОРМАТИРОВАНИЕ ---
+        
+        // Заголовки (### Текст -> *ТЕКСТ*)
+        formattedResponse = formattedResponse.replace(/^#{1,6}\s+(.*?)$/gm, (match, title) => {
+          return `\n*${title.toUpperCase()}*`;
+        });
 
-        const sendAction = () => {
-            // Шлем action с учетом треда
-            if (threadId) {
-                bot.sendChatAction(chatId, 'typing', { message_thread_id: threadId }).catch(() => { });
-            } else {
-                bot.sendChatAction(chatId, 'typing').catch(() => { });
-            }
-        };
+        // Жирный шрифт (**текст** -> *текст*)
+        formattedResponse = formattedResponse.replace(/\*\*([\s\S]+?)\*\*/g, '*$1*');
+        formattedResponse = formattedResponse.replace(/__([\s\S]+?)__/g, '*$1*');
 
-        sendAction(); // Шлем первый раз сразу
-        typingTimer = setInterval(sendAction, 4000); // Повторяем каждые 4 сек
+        // Списки (* пункт -> • пункт)
+        formattedResponse = formattedResponse.replace(/^(\s*)[\*\-]\s+/gm, '$1• ');
 
-        // !!! ЗАЩИТА ОТ ВЕЧНОГО ПЕЧАТАНИЯ !!!
-        // Если через 60 секунд мы все еще печатаем — вырубаем принудительно.
-        safetyTimeout = setTimeout(() => {
-            console.log(`[TYPING SAFETY] Принудительная остановка тайпинга в ${chatId}`);
-            stopTyping();
-        }, 20000);
-    };
+        // Убираем лишние переносы
+        formattedResponse = formattedResponse.replace(/\n{3,}/g, '\n\n');
 
-    const command = text.trim().split(/[\s@]+/)[0].toLowerCase();
+      } catch (fmtErr) {
+        console.error("[FORMAT ERROR] Ошибка форматирования:", fmtErr.message);
+        // В случае ошибки форматирования используем оригинальный ответ
+        formattedResponse = aiResponse;
+      }
 
-    // Определяем красивое имя чата (Название группы или Имя юзера в личке)
-    const chatTitle = msg.chat.title || msg.chat.username || msg.chat.first_name || "Unknown";
+      // --- 2. ОТПРАВКА ---
+      
+      // Защита от спама (обрезаем, если больше 8500 символов)
+      if (formattedResponse.length > 8500) {
+        formattedResponse = formattedResponse.substring(0, 8500) + "\n\n...[сообщение слишком длинное, обрезано]...";
+      }
 
-    // === УВЕДОМЛЕНИЕ О НОВОМ ЧАТЕ ===
-    // Если чата нет в базе И это не сам админ пишет себе в личку
-    if (!storage.hasChat(chatId) && chatId !== config.adminId) {
-        let alertText = `🔔 **НОВЫЙ КОНТАКТ!**\n\n📂 **Чат:** ${chatTitle}\n🆔 **ID:** \`${chatId}\`\n`;
+      // Разбиваем на куски по 4000 символов
+      const chunks = formattedResponse.match(/[\s\S]{1,4000}/g) || [formattedResponse];
 
-        const inviter = `@${msg.from.username || "нет"} (${msg.from.first_name})`;
+      // Отправляем каждый кусок сообщения
+      for (const chunk of chunks) {
+        await bot.sendMessage(chatId, chunk, { 
+          reply_to_message_id: msg.message_id,
+          parse_mode: 'Markdown'
+        });
+      }
 
-        if (msg.chat.type === 'private') {
-            alertText += `👤 **Написал:** ${inviter}\n💬 **Текст:** ${text}`;
-        } else {
-            // Если добавили в группу
-            if (msg.new_chat_members && msg.new_chat_members.some(u => u.id === config.botId)) {
-                alertText += `👋 **Меня добавил:** ${inviter}\n👥 **Тип:** Группа/Канал`;
-            } else {
-                // Просто первое сообщение из новой группы, где я уже был (или админ чистил базу)
-                alertText += `👤 **Активация:** ${inviter}\n💬 **Сообщение:** ${text}`;
-            }
-        }
-
-        // Шлем админу тихонько
-        bot.sendMessage(config.adminId, alertText, { parse_mode: 'Markdown' }).catch(() => { });
-    }
-
-    // Сохраняем в базу, чтобы в файлах было видно
-    storage.updateChatName(chatId, chatTitle);
-
-    // === ЛИЧКА: ПЕРЕСЫЛКА АДМИНУ И ОТВОРОТ-ПОВОРОТ ===
-    if (msg.chat.type === 'private' && userId !== config.adminId) {
-        // 1. Стучим админу о КАЖДОМ сообщении
-        const senderInfo = `@${msg.from.username || "нет"} (${msg.from.first_name})`;
-
-        // Формируем отчет: текст или пометка о файле
-        let contentReport = text ? `💬 ${text}` : "📎 [Прислал файл или стикер]";
-
-        // Шлем тебе
-        bot.sendMessage(config.adminId, `📩 ЛС от ${senderInfo}:\n${contentReport}`).catch(e => console.error("Ошибка пересылки ЛС:", e.message));
-
-        // 2. Если это не команда /start — отшиваем вежливо, но с инфой
-        if (command !== '/start') {
-            bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)).catch(() => { });
-            await new Promise(r => setTimeout(r, 1500)); // Пауза для реализма
-
-            const infoText = `В личке я общаюсь только с Админом.**
-
-**Почему так?**
-Бот работает на моих API-ключах Google, и я отвечаю за всё, что он генерирует. Поэтому он работает только там, где есть я (в чатах) или в моей личке.
-
-**Где меня потестить?**
-Залетай в комментарии к моему репозиторию на Гитхабе, там я отвечаю всем.
-*(Просто создай Issue)*
-
-**Хочешь себе такого же бота?**
-Весь мой код открыт! Ты можешь скачать меня, вставить свои ключи и запустить на своем компе или сервере.
-[Скачать с GitHub](https://github.com/MrReason148-8/Zhmykh-bot)
-
-**Инструкция по установке**
-Лежит в файле README на Гитхабе.`;
-
-            // Отправляем с Markdown.
-            // disable_web_page_preview: true — чтобы не забивать чат картинками ссылок
-            await bot.sendMessage(chatId, infoText, { parse_mode: 'Markdown', disable_web_page_preview: true });
-
-            return; // Дальше не пускаем
-        }
-    }
-
-
-    if (msg.left_chat_member && msg.left_chat_member.id === config.adminId) {
-        await bot.sendMessage(chatId, "Батя ушел, и я сваливаю.");
-        await bot.leaveChat(chatId);
-        return;
-    }
-
-    // === ОБРАБОТКА ГОЛОСОВЫХ (Voice to Text) ===
-    if (msg.voice || msg.audio) {
-        startTyping();
-
-        try {
-            const media = msg.voice || msg.audio;
-            const fileId = media.file_id;
-            const mimeType = msg.voice ? 'audio/ogg' : (media.mime_type || 'audio/mpeg');
-            const link = await bot.getFileLink(fileId);
-            const resp = await axios.get(link, { responseType: 'arraybuffer' });
-            const buffer = Buffer.from(resp.data);
-            const userName = msg.from.first_name || "Анон";
-
-            const transcription = await ai.transcribeAudio(buffer, userName, mimeType);
-
-            stopTyping();
-
-            if (transcription) {
-                let replyText = "";
-
-                // Считаем длины
-                const fullLen = transcription.text.length;
-                const tldrLen = transcription.summary.length;
-
-                // Логика полезности TLDR:
-                // Показываем суть, только если она короче оригинала хотя бы на 15% (умножаем на 0.85).
-                // Если TLDR почти такой же длины или длиннее — в нем нет смысла.
-                const isTldrUseful = tldrLen < (fullLen * 0.65);
-
-                if (isTldrUseful) {
-                    replyText = `📝 **Суть:**\n${transcription.summary}\n\n🎤 **Текст:**\n${transcription.text}`;
-                } else {
-                    // Если TLDR бесполезен, просто пишем кто сказал
-                    replyText = `**${userName} сказал:**\n${transcription.text}`;
-                }
-
-                // Останавливаем "печатает"
-                try { await bot.sendMessage(chatId, replyText, getReplyOptions(msg)); } catch (e) { }
-
-                // !!! ВАЖНО: Если чат в муте — на этом всё. Не отвечаем на содержимое.
-                if (storage.isTopicMuted(chatId, threadId)) return;
-
-                // Если не в муте — подменяем текст, чтобы бот мог прокомментировать
-                text = transcription.text;
-                msg.text = transcription.text;
-            }
-        } catch (e) {
-            console.error("Ошибка голосового:", e.message);
-        }
-    }
-
-
-    if (!text && !msg.photo && !msg.sticker && !msg.voice && !msg.audio) return;
-
-    if (msg.chat.type === 'private') {
-        if (userId !== config.adminId) return;
-    } else {
-        storage.trackUser(chatId, msg.from);
-    }
-
-    // === НАБЛЮДАТЕЛЬ ===
-    if (!analysisBuffers[chatId]) analysisBuffers[chatId] = [];
-
-    // Собираем полную инфу о юзере для лога
-    const senderName = msg.from.first_name || "User";
-    const senderUsername = msg.from.username ? `@${msg.from.username}` : "";
-    const displayName = senderUsername ? `${senderName} (${senderUsername})` : senderName;
-
-    if (!text.startsWith('/')) {
-        // Пишем в буфер более понятное имя
-        analysisBuffers[chatId].push({ userId, name: displayName, text });
-    }
-    if (analysisBuffers[chatId].length >= BUFFER_SIZE) {
-        processBuffer(chatId);
-    }
-
-    const isMuted = storage.isTopicMuted(chatId, threadId);
-
-    // === КОМАНДЫ ===
-    if (command === '/help' || command === '/start') {
-        const helpText = `
-*Вот тебе гайд*
-
-**🦉 Вижу и Слышу:**
-• Кидай войс — я расшифрую текст и напишу краткую суть.
-• Кидай фото или видео — я пойму, что там, и прокомментирую.
-• Я умею гуглить актуальную инфу.
-• Напомню сделать что угодно, чтобы ты не забыл, просто напиши «**Жмых** напомни [Завтра, в следующий четверг или через пару минут]» — и я поставлю напоминание, или ответь реплаем на сообщение, в котором есть дата или время события.
-
-**🎲 Развлекуха:**
-• "**Жмых** кинь монетку" — Орел/Решка.
-• "**Жмых** число 1-(цифра)" — Рандомное число.
-• "**Жмых** кто из нас (текст)" — Выберу виноватого или счастливчика из чата.
-
-**🕵️ Досье и Память:**
-• "**Жмых** кто я?" — Мое честное мнение о тебе.
-• "**Жмых** расскажи про @юзера" — Выдам базу про участника.
-
-**⚙️ Настройки:**
-• /mute — Режим тишины (перестану встревать в разговор сам).
-• /reset — Сброс памяти (если я начал тупить или забыл контекст).
-        `;
-        try { return await bot.sendMessage(chatId, helpText, getBaseOptions(threadId)); } catch (e) { }
-    }
-
-    if (command === '/mute') {
-        const nowMuted = storage.toggleMute(chatId, threadId);
-        return bot.sendMessage(chatId, nowMuted ? "🦉 Окей молчу" : "🦉 Я тут", getBaseOptions(threadId));
-    }
-    if (command === '/reset') {
+      // Добавляем в историю чата
+      if (!chatHistory[chatId]) {
         chatHistory[chatId] = [];
-        analysisBuffers[chatId] = [];
-        return bot.sendMessage(chatId, "🦉 Окей, всё забыл, ну было и было", getBaseOptions(threadId));
-    }
-
-    if (command === '/restart' && userId === config.adminId) {
-        await bot.sendMessage(chatId, "🔄 Перезагружаюсь...", getBaseOptions(threadId));
-        exec('pm2 restart zhmykh-bot', (err) => { // ИМЯ PM2 ПРОЦЕССА ИЗМЕНЕНО
-            if (err) bot.sendMessage(config.adminId, `❌ Ошибка рестарта: ${err.message}`);
+      }
+      chatHistory[chatId].push({
+        role: 'assistant',
+        text: aiResponse,
+        timestamp: new Date().toISOString()
+      });
+      
+    } catch (err) {
+      console.error("[CRITICAL AI ERROR]:", err);
+      
+      // Отправляем уведомление админу
+      const errorMsg = `🔥 **Ошибка ИИ!**\n\nЧат: ${msg.chat?.title || 'ЛС'}\nОшибка: \`${err.message}\``;
+      await bot.sendMessage(config.adminId, errorMsg, { parse_mode: 'Markdown' }).catch(console.error);
+      
+      // Отправляем пользователю сообщение об ошибке
+      try {
+        await bot.sendMessage(chatId, "Что-то пошло не так. Давай попробуем ещё раз?", {
+          reply_to_message_id: msg.message_id
         });
-        return;
+      } catch (e) {
+        console.error("Не удалось отправить сообщение об ошибке пользователю:", e);
+      }
     }
-
-    // === СТРОГАЯ ПРОВЕРКА МУТА ===
-    // Если топик в муте, мы игнорируем ЛЮБОЙ текст (триггеры, реплаи, имя),
-    // кроме команд выше (/mute, /reset, /start).
-    if (storage.isTopicMuted(chatId, threadId)) {
-        return; // Полный игнор
-    }
-
-    // === ТЕПЕРЬ, КОГДА МЫ ТОЧНО НЕ В МУТЕ ===
-    if (isDirectlyCalled) {
-        startTyping();
-    }
-
-    addToHistory(chatId, senderName, text);
-
-    // === НАПОМИНАЛКИ ===
-    if (isDirectlyCalled && (cleanText.includes("напомни") || cleanText.includes("напоминай"))) {
-
-        bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)).catch(() => { });
-        console.log(`[LOGIC] Обнаружен запрос на напоминание: ${text}`);
-
-        // 1. Вытаскиваем текст сообщения, на которое ответили (если есть)
-        const replyContent = msg.reply_to_message
-            ? (msg.reply_to_message.text || msg.reply_to_message.caption || "")
-            : "";
-
-        // 2. Передаем и запрос юзера, и контекст реплая
-        const parsed = await ai.parseReminder(text, replyContent);
-
-        if (parsed && parsed.targetTime) {
-            const username = msg.from.username ? `@${msg.from.username}` : msg.from.first_name;
-
-            storage.addReminder(chatId, userId, username, parsed.targetTime, parsed.reminderText);
-
-            console.log(`[REMINDER SET] Установлено на: ${parsed.targetTime}`);
-            return bot.sendMessage(chatId, parsed.confirmation, getReplyOptions(msg));
-        } else {
-            console.log(`[REMINDER ERROR] AI не смог распарсить время.`);
-        }
-    }
-
-
-    // === ФИЧИ ===
-    if (hasTriggerWord) {
-        const aboutMatch = cleanText.match(/(?:расскажи про|кто так(?:ой|ая)|мнение о|поясни за)\s+(.+)/);
-        if (aboutMatch) {
-            const targetName = aboutMatch[1].replace('?', '').trim();
-            const targetProfile = storage.findProfileByQuery(chatId, targetName);
-            if (targetProfile) {
-                startTyping();
-                const description = await ai.generateProfileDescription(targetProfile, targetName);
-                stopTyping();
-                try { return await bot.sendMessage(chatId, description, getReplyOptions(msg)); } catch (e) { }
-            }
-        }
-
-        if (cleanText.match(/(монетк|кинь|брось|подбрось|подкинь)/)) {
-            try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch (e) { }
-            const result = Math.random() > 0.5 ? "ОРЁЛ" : "РЕШКА";
-            const flavor = await ai.generateFlavorText("подбросить монетку", result);
-            try { return await bot.sendMessage(chatId, flavor, getReplyOptions(msg)); } catch (e) { }
-        }
-
-        const rangeMatch = cleanText.match(/(\d+)-(\d+)/);
-        if ((cleanText.includes("число") || cleanText.includes("рандом")) && rangeMatch) {
-            try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch (e) { }
-            const min = parseInt(rangeMatch[1]);
-            const max = parseInt(rangeMatch[2]);
-            const rand = Math.floor(Math.random() * (max - min + 1)) + min;
-            const flavor = await ai.generateFlavorText(`выбрать число ${min}-${max}`, String(rand));
-            try { return await bot.sendMessage(chatId, flavor, getReplyOptions(msg)); } catch (e) { }
-        }
-
-        const isWhoGame = cleanText.match(/жмых\W+кто\??$/) || cleanText.trim() === "жмых кто"; // ИМЯ БОТА ИЗМЕНЕНО
-        if (isWhoGame) {
-            try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch (e) { }
-            const randomUser = storage.getRandomUser(chatId);
-            if (!randomUser) return bot.sendMessage(chatId, "Никого не знаю пока.", getBaseOptions(threadId));
-            const flavor = await ai.generateFlavorText(`выбрать случайного человека из чата на вопрос "${text}"`, randomUser);
-            try { return await bot.sendMessage(chatId, flavor, getReplyOptions(msg)); } catch (e) { }
-        }
-
-        if (cleanText.match(/(итоги|сводка|что\s+было|суть|резюмируй).*(дня|сегодня)/i)) {
-            try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch (e) { }
-            const summary = await ai.getDailySummary(chatHistory[chatId] || []);
-            try { return await bot.sendMessage(chatId, summary, getBaseOptions(threadId)); } catch (e) { }
-        }
-
-        if (cleanText.match(/(поясни|расскажи|че там).*(тренд|мем|хайп|news|новости)/i) || cleanText.includes("жмых че в тренде")) {
-            try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch (e) { }
-            const summary = await ai.getTrendSummary(text);
-            try { return await bot.sendMessage(chatId, summary, getBaseOptions(threadId)); } catch (e) { }
-        }
-
-        // Judge Debate Command
-        if (cleanText.match(/(кто\s+прав|рассуди|кто\s+виноват|судья)/i)) {
-            try { await bot.sendChatAction(chatId, 'typing', getActionOptions(threadId)); } catch (e) { }
-            const result = await ai.judgeDebate(chatHistory[chatId] || []);
-
-            if (result && result.winner) {
-                const chatData = storage.getChat(chatId);
-                let winnerId = null;
-                if (chatData && chatData.users) {
-                    for (const [uid, name] of Object.entries(chatData.users)) {
-                        if (name.includes(result.winner) || result.winner.includes(name)) {
-                            winnerId = uid;
-                            break;
-                        }
-                    }
-                }
-
-                if (winnerId) {
-                    storage.incrementDebateWin(chatId, winnerId);
-                }
-
-                let msg = `⚖️ **ВЕРДИКТ ЖМЫХА**\n\n`;
-                msg += `🏆 **Победитель:** ${result.winner}\n`;
-                msg += `💩 **Проигравший:** ${result.loser}\n\n`;
-                msg += `📝 **Суть:** ${result.reason}`;
-
-                try { return await bot.sendMessage(chatId, msg, getBaseOptions(threadId)); } catch (e) { }
-            } else if (result && result.reason) {
-                try { return await bot.sendMessage(chatId, result.reason, getBaseOptions(threadId)); } catch (e) { }
-            }
-        }
-
-        // Leaderboard Command
-        if (cleanText.match(/(топ|лидеры|список).*(бойцов|срачей|душнил)/i)) {
-            const top = storage.getDebateLeaderboard(chatId);
-            let msg = `🏆 **ТОП БОЙЦОВ ЧАТА**\n\n`;
-            if (top.length === 0) msg += "Пока тихо. Никто не срался.";
-            else {
-                top.forEach((u, i) => {
-                    msg += `${i + 1}. ${u.name} — ${u.wins} побед\n`;
-                });
-            }
-            try { return await bot.sendMessage(chatId, msg, getBaseOptions(threadId)); } catch (e) { }
-        }
-    }
-
-    // === РЕШЕНИЕ ОБ ОТВЕТЕ ===
-    let shouldAnswer = false;
-
-    if (isDirectlyCalled) {
-        shouldAnswer = true;
-    } else {
-        // Увеличили контекст до 5 сообщений и добавили имена (m.role), чтобы бот понимал диалог
-        if (text.length > 10 && Math.random() < config.spontaneousChance) {
-            const historyBlock = chatHistory[chatId] ? chatHistory[chatId].slice(-15).map(m => `${m.role}: ${m.text}`).join('\n') : "";
-            if (historyBlock) shouldAnswer = await ai.shouldAnswer(historyBlock);
-        }
-    }
-    // === ЛОГИКА РЕАКЦИЙ (15%) ===
-    if (!shouldAnswer && text.length > 10 && !isReplyToBot && Math.random() < 0.07) {
-
-        // Берем контекст (последние 10 сообщений), чтобы реакция была в тему
-        const historyBlock = chatHistory[chatId].slice(-15).map(m => `${m.role}: ${m.text}`).join('\n');
-
-        // Передаем истории вместе с текущим текстом
-        ai.determineReaction(historyBlock + `\nСообщение для реакции: ${text}`).then(async (emoji) => {
-            if (emoji) {
-                try { await bot.setMessageReaction(chatId, msg.message_id, { reaction: [{ type: 'emoji', emoji: emoji }] }); } catch (e) { }
-            }
-        });
-    }
-
-    // === ОТПРАВКА ОТВЕТА ===
-    if (shouldAnswer) {
-        startTyping();
-
-        let imageBuffer = null;
-        let mimeType = "image/jpeg"; // По умолчанию для фото
-
-        // === ОБРАБОТКА МЕДИА (ФОТО, ВИДЕО, ДОКИ, СТИКЕРЫ) ===
-
-        // 1. СТИКЕР
-        if (msg.sticker) {
-            const stickerEmoji = msg.sticker.emoji || "";
-            if (stickerEmoji) text += ` [Отправлен стикер: ${stickerEmoji}]`;
-
-            if (!msg.sticker.is_animated && !msg.sticker.is_video) {
-                try {
-                    const link = await bot.getFileLink(msg.sticker.file_id);
-                    const resp = await axios.get(link, { responseType: 'arraybuffer' });
-                    imageBuffer = Buffer.from(resp.data);
-                    mimeType = "image/webp";
-                } catch (e) { console.error("Ошибка стикера:", e.message); }
-            }
-        }
-
-        // 2. ФОТО (обычное или реплай)
-        else if (msg.photo || (msg.reply_to_message && msg.reply_to_message.photo)) {
-            try {
-                const photoObj = msg.photo ? msg.photo[msg.photo.length - 1] : msg.reply_to_message.photo[msg.reply_to_message.photo.length - 1];
-                const link = await bot.getFileLink(photoObj.file_id);
-                const resp = await axios.get(link, { responseType: 'arraybuffer' });
-                imageBuffer = Buffer.from(resp.data);
-                mimeType = "image/jpeg";
-                console.log(`[MEDIA] Фото скачано`);
-            } catch (e) { console.error("Ошибка фото:", e.message); }
-        }
-
-        // 3. ВИДЕО
-        else if (msg.video || (msg.reply_to_message && msg.reply_to_message.video)) {
-            const vid = msg.video || msg.reply_to_message.video;
-            // Лимит 20 МБ (Telegram API limit for getFile)
-            if (vid.file_size > 20 * 1024 * 1024) {
-                return bot.sendMessage(chatId, "🐢 Братан, видос жирный пиздец (больше 20мб). Я не грузчик, таскать такое. Сожми или обрежь.", getReplyOptions(msg));
-            }
-            try {
-                await bot.sendChatAction(chatId, 'upload_video', getActionOptions(threadId));
-                const link = await bot.getFileLink(vid.file_id);
-                const resp = await axios.get(link, { responseType: 'arraybuffer' });
-                imageBuffer = Buffer.from(resp.data);
-                mimeType = vid.mime_type || "video/mp4";
-                console.log(`[MEDIA] Видео скачано (${mimeType})`);
-            } catch (e) { console.error("Ошибка видео:", e.message); }
-        }
-
-        // 4. ДОКУМЕНТЫ (PDF, TXT, CSV...)
-        else if (msg.document || (msg.reply_to_message && msg.reply_to_message.document)) {
-            const doc = msg.document || msg.reply_to_message.document;
-
-            // Список того, что Gemini точно ест
-            const allowedMimes = [
-                'application/pdf', 'application/x-javascript', 'text/javascript',
-                'application/x-python', 'text/x-python', 'text/plain', 'text/html',
-                'text/css', 'text/md', 'text/csv', 'text/xml', 'text/rtf'
-            ];
-
-            if (doc.file_size > 20 * 1024 * 1024) {
-                return bot.sendMessage(chatId, "🐘 Не, файл тяжелый (больше 20мб). Я пас.", getReplyOptions(msg));
-            }
-
-            if (!allowedMimes.includes(doc.mime_type) && !doc.mime_type.startsWith('image/')) {
-                // Если формат странный, но юзер прямо просит - можно попробовать рискнуть, но лучше предупредить
-                return bot.sendMessage(chatId, "🗿 Эт че за формат? Я такое не читаю. Давай PDF или текст.", getReplyOptions(msg));
-            }
-
-            try {
-                await bot.sendChatAction(chatId, 'upload_document', getActionOptions(threadId));
-                const link = await bot.getFileLink(doc.file_id);
-                const resp = await axios.get(link, { responseType: 'arraybuffer' });
-                imageBuffer = Buffer.from(resp.data);
-                mimeType = doc.mime_type;
-                console.log(`[MEDIA] Док скачан (${mimeType})`);
-            } catch (e) { console.error("Ошибка дока:", e.message); }
-        }
-
-        // 5. ССЫЛКА (если ничего другого нет)
-        // 5. ССЫЛКА (ищем в текущем тексте ИЛИ в реплае)
-        else if (!imageBuffer) {
-            // Сначала ищем в том, что ты написал
-            let urlMatch = text.match(/https?:\/\/[^\s]+?\.(jpg|jpeg|png|webp|gif|bmp)/i);
-
-            // Если нет, и это реплай — ищем в сообщении, на которое ответили
-            if (!urlMatch && msg.reply_to_message && (msg.reply_to_message.text || msg.reply_to_message.caption)) {
-                const replyText = msg.reply_to_message.text || msg.reply_to_message.caption;
-                urlMatch = replyText.match(/https?:\/\/[^\s]+?\.(jpg|jpeg|png|webp|gif|bmp)/i);
-            }
-
-            if (urlMatch) {
-                try {
-                    const resp = await axios.get(urlMatch[0], { responseType: 'arraybuffer' });
-                    imageBuffer = Buffer.from(resp.data);
-                    if (urlMatch[0].endsWith('.webp')) mimeType = "image/webp";
-                    else mimeType = "image/jpeg";
-                    console.log(`[MEDIA] Картинка по ссылке скачана`);
-                } catch (e) { }
-            }
-        }
-        const instruction = msg.from.username ? storage.getUserInstruction(msg.from.username) : "";
-        const userProfile = storage.getProfile(chatId, userId);
-
-        // === ЛОГИКА ССЫЛОК ===
-        let targetLink = null;
-
-        // Ищем ссылку
-        const linkRegex = /https?:\/\/[^\s]+/;
-        const linkInText = text.match(linkRegex);
-
-        if (linkInText) {
-            targetLink = linkInText[0];
-        } else if (msg.reply_to_message) {
-            if (msg.reply_to_message.text) {
-                const linkInReply = msg.reply_to_message.text.match(linkRegex);
-                if (linkInReply) targetLink = linkInReply[0];
-            } else if (msg.reply_to_message.caption) {
-                const linkInCaption = msg.reply_to_message.caption.match(linkRegex);
-                if (linkInCaption) targetLink = linkInCaption[0];
-            }
-        }
-
-        let aiResponse = "";
-
-        try {
-            // Вытаскиваем текст реплая для контекста
-            const replyText = msg.reply_to_message ? (msg.reply_to_message.text || msg.reply_to_message.caption || "") : "";
-
-            aiResponse = await ai.getResponse(
-                chatHistory[chatId],
-
-                { sender: senderName, text: text, replyText: replyText }, // <--- Добавили replyText
-                imageBuffer,
-                mimeType,
-                instruction,
-                userProfile,
-                !isDirectlyCalled
-            );
-
-            console.log(`[DEBUG] 2. Ответ от AI получен! Длина: ${aiResponse ? aiResponse.length : "PUSTO"}`);
-
-            if (!aiResponse) {
-                console.log(`[DEBUG] 🚨 ОШИБКА: AI вернул пустоту!`);
-                bot.sendMessage(config.adminId, `⚠️ **ALARM:** Gemini вернула пустую строку!\n📂 **Чат:** ${chatTitle}`, { parse_mode: 'Markdown' }).catch(() => { });
-                aiResponse = getZhmykhErrorReply("503 overloaded"); // ИМЯ ФУНКЦИИ ИЗМЕНЕНО
-
-            }
-
-        } catch (err) {
-            console.error("[CRITICAL AI ERROR]:", err.message);
-
-            // 1. ШЛЕМ ТЕХНИЧЕСКИЙ РЕПОРТ АДМИНУ (В личку)
-            const errorMsg = `🔥 **Gemini упала!**\n\nЧат: ${chatTitle}\nОшибка: \`${err.message}\``;
-            bot.sendMessage(config.adminId, errorMsg, { parse_mode: 'Markdown' }).catch(() => { });
-
-            // 2. ГЕНЕРИРУЕМ СМЕШНОЙ ОТВЕТ ДЛЯ ЧАТА
-            // Передаем текст ошибки в нашу новую функцию
-            aiResponse = getZhmykhErrorReply(err.message); // ИМЯ ФУНКЦИИ ИЗМЕНЕНО
-        }
-
-
-        // === ФОРМАТИРОВАНИЕ И ОТПРАВКА ===
-
-        // Создаем копию текста для обработки
-        let formattedResponse = aiResponse;
-
-        try {
-            // --- 1. ФОРМАТИРОВАНИЕ ---
-
-            // Заголовки (### Текст -> *ТЕКСТ*)
-            formattedResponse = formattedResponse.replace(/^#{1,6}\s+(.*?)$/gm, (match, title) => {
-                return `\n*${title.toUpperCase()}*`;
-            });
-
-            // Жирный шрифт (**текст** -> *текст*)
-            formattedResponse = formattedResponse.replace(/\*\*([\s\S]+?)\*\*/g, '*$1*');
-            formattedResponse = formattedResponse.replace(/__([\s\S]+?)__/g, '*$1*');
-
-            // Списки (* пункт -> • пункт)
-            formattedResponse = formattedResponse.replace(/^(\s*)[\*\-]\s+/gm, '$1• ');
-
-            // Убираем лишние переносы
-            formattedResponse = formattedResponse.replace(/\n{3,}/g, '\n\n');
-
-        } catch (fmtErr) {
-            console.error("[FORMAT ERROR] Ошибка форматирования, шлю сырой текст:", fmtErr.message);
-            formattedResponse = aiResponse; // Если формат сломался, шлем оригинал
-        }
-
-        try {
-            // --- 2. ОТПРАВКА ---
-
-            // Защита от спама (обрезаем, если больше 8500)
-            if (formattedResponse.length > 8500) {
-                formattedResponse = formattedResponse.substring(0, 8500) + "\n\n...[обсуждение слишком длинное, я устал]...";
-            }
-
-            // Разбиваем на куски по 4000 символов
-            let chunks = formattedResponse.match(/[\s\S]{1,4000}/g) || [];
-
-            // Если match вернул пустоту (глюк), но текст ЕСТЬ — создаем кусок вручную
-            if (chunks.length === 0 && formattedResponse.length > 0) {
-                chunks = [formattedResponse];
-            }
-
-            for (const chunk of chunks) {
-                await bot.sendMessage(chatId, chunk, getReplyOptions(msg));
-            }
-
-            stopTyping(); // <-- Всё, сообщение ушло, выключаем статус
-            addToHistory(chatId, "Жмых", aiResponse);
-
-        } catch (error) {
-            stopTyping();
-            console.error(`[SEND ERROR]: ${error.message}`);
-            bot.sendMessage(config.adminId, `⚠️ **Ошибка отправки:** ${error.message}\n📂 **Чат:** ${chatTitle}\n🆔 **ID:** ${chatId}`, { parse_mode: 'Markdown' }).catch(() => { });
-
-            try {
-                const rawChunks = aiResponse.match(/[\s\S]{1,4000}/g) || [aiResponse];
-                for (const chunk of rawChunks) {
-                    await bot.sendMessage(chatId, chunk, { reply_to_message_id: msg.message_id });
-                }
-                addToHistory(chatId, "Жмых", aiResponse);
-            } catch (e2) { console.error("FATAL SEND ERROR:", e2.message); }
-        }
-
-        /* 
-        // [OPTIMIZATION] Отключаем моментальный анализ, чтобы не тратить лимиты (2 запроса на 1 ответ).
-        // Вместо этого используем отложенный анализ (Batch) ниже.
-        const contextForAnalysis = chatHistory[chatId] ? chatHistory[chatId].slice(-5).map(m => `${m.role}: ${m.text}`).join('\n') : "";
-        ai.analyzeUserImmediate(contextForAnalysis, userProfile).then(updated => { ... });
-        */
-    } // End if (shouldAnswer)
 
     // === ПАССИВНЫЙ АНАЛИЗАТОР (Observer) ===
     // Собираем сообщения в буфер для пакетного анализа (раз в 20 сообщений)
-    if (!analysisBuffers[chatId]) analysisBuffers[chatId] = [];
+    if (!analysisBuffers[chatId]) {
+      analysisBuffers[chatId] = [];
+    }
 
     // Не анализируем команды и совсем короткие сообщения
     if (text.length > 5 && !text.startsWith('/')) {
-        analysisBuffers[chatId].push({
-            userId: userId,
-            name: senderName,
-            text: text,
-            role: 'user'
+      analysisBuffers[chatId].push({
+        userId: userId,
+        name: msg.from.first_name || 'Пользователь',
+        text: text,
+        role: 'user',
+        timestamp: new Date().toISOString()
+      });
+
+      // Если накопилось достаточно — запускаем анализ
+      if (analysisBuffers[chatId].length >= BUFFER_SIZE) {
+        // Обработка буфера в фоновом режиме
+        processBuffer(chatId).catch(err => {
+          console.error("[BUFFER PROCESSING ERROR]:", err);
         });
+      }
     }
 
-    // Если накопилось достаточно — запускаем анализ
-    if (analysisBuffers[chatId].length >= BUFFER_SIZE) {
-        processBuffer(chatId);
+  } catch (error) {
+    console.error("[PROCESS MESSAGE ERROR]:", error);
+    
+    // Пытаемся отправить сообщение об ошибке в чат
+    try {
+      await bot.sendMessage(msg.chat.id, "Произошла ошибка при обработке сообщения. Пожалуйста, попробуйте ещё раз.", {
+        reply_to_message_id: msg.message_id
+      });
+    } catch (e) {
+      console.error("Не удалось отправить сообщение об ошибке:", e);
     }
+    
+    // Отправляем уведомление админу
+    try {
+      await bot.sendMessage(
+        config.adminId,
+        `⚠️ **Ошибка в processMessage**\n` +
+        `Чат: ${msg.chat?.title || 'ЛС'}\n` +
+        `Ошибка: \`${error.message}\``,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (e) {
+      console.error("Не удалось отправить уведомление админу:", e);
+    }
+  }
 };
 
-module.exports = { processMessage };
+// Функция для обработки буфера сообщений
+async function processBuffer(chatId) {
+  if (!analysisBuffers[chatId] || analysisBuffers[chatId].length === 0) {
+    return;
+  }
+  
+  const messages = [...analysisBuffers[chatId]];
+  analysisBuffers[chatId] = [];
+  
+  try {
+    // Здесь можно добавить анализ накопленных сообщений
+    // Например, анализ тональности, тематики и т.д.
+    console.log(`[ANALYSIS] Processing ${messages.length} messages for chat ${chatId}`);
+    
+    // Пример: анализ тональности сообщений
+    const sentimentAnalysis = await analyzeSentiment(messages);
+    
+    // Логируем результаты анализа
+    if (sentimentAnalysis) {
+      console.log(`[SENTIMENT] Chat ${chatId}:`, sentimentAnalysis);
+    }
+    
+  } catch (error) {
+    console.error(`[BUFFER PROCESSING ERROR] Chat ${chatId}:`, error);
+    // В случае ошибки возвращаем сообщения обратно в буфер
+    analysisBuffers[chatId] = [...messages, ...(analysisBuffers[chatId] || [])];
+  }
+}
+
+// Вспомогательная функция для анализа тональности (заглушка)
+async function analyzeSentiment(messages) {
+  // Здесь должна быть реализация анализа тональности
+  // Возвращаем заглушку для примера
+  return {
+    totalMessages: messages.length,
+    positive: Math.floor(Math.random() * 100),
+    negative: Math.floor(Math.random() * 100),
+    neutral: Math.floor(Math.random() * 100)
+  };
+}
+
+// Экспортируем функции
+module.exports = { 
+  processMessage,
+  karmaUtils, // Экспортируем для тестирования
+  processBuffer, // Экспортируем для тестирования
+  analyzeSentiment // Экспортируем для тестирования
+};

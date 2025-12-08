@@ -1,17 +1,29 @@
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require("@google/generative-ai");
 const config = require('../config');
 const prompts = require('../core/prompts');
+const storage = require('./storage');
 const axios = require('axios');
 
 class AiService {
   constructor() {
     this.keyIndex = 0;
+    this.modelIndex = 0; // Индекс текущей модели
     this.keys = config.geminiKeys;
-    if (this.keys.length === 0) console.error("CRITICAL: Нет ключей Gemini в .env!");
+    this.models = config.modelRotation; // Массив моделей для ротации
+    this.currentModel = this.models[0]; // Текущая модель
+    
+    if (this.keys.length === 0) {
+      console.error("CRITICAL: Нет ключей Gemini в .env!");
+    }
+    
     this.initModel();
   }
 
-  initModel() {
+  /**
+   * Инициализирует модель с текущими настройками
+   * @param {string} [modelName] - Имя модели для инициализации (если не указано, берется текущая модель)
+   */
+  initModel(modelName = null) {
     const currentKey = this.keys[this.keyIndex];
     const genAI = new GoogleGenerativeAI(currentKey);
 
@@ -28,33 +40,111 @@ class AiService {
     };
 
     const requestOptions = config.geminiBaseUrl ? { baseUrl: config.geminiBaseUrl } : {};
+    
+    // Обновляем текущую модель, если не указана конкретная
+    if (!modelName) {
+      this.currentModel = this.models[this.modelIndex];
+      modelName = this.currentModel.name;
+    }
 
-    // [FIX] Добавляем системную инструкцию прямо в модель для железного характера
-    this.model = genAI.getGenerativeModel({
-      model: config.modelName,
-      systemInstruction: prompts.system(),
-      safetySettings: safetySettings,
-      generationConfig: generationConfig,
-      tools: [{ googleSearch: {} }]
-    }, requestOptions);
+    try {
+      this.model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction: prompts.system(),
+        safetySettings: safetySettings,
+        generationConfig: {
+          ...generationConfig,
+          ...(this.currentModel.generationConfig || {})
+        },
+        tools: this.currentModel.tools || [{ googleSearch: {} }]
+      }, requestOptions);
+      
+      console.log(`[AI] Инициализирована модель: ${modelName}`);
+    } catch (error) {
+      console.error(`[AI ERROR] Ошибка инициализации модели ${modelName}:`, error);
+      this.rotateModel(); // Пробуем следующую модель в случае ошибки
+    }
   }
 
+  /**
+   * Переключается на следующий API ключ
+   */
   rotateKey() {
     this.keyIndex = (this.keyIndex + 1) % this.keys.length;
     console.log(`[AI WARNING] Лимит ключа исчерпан! Переключаюсь на ключ #${this.keyIndex + 1}...`);
     this.initModel();
   }
+  
+  /**
+   * Переключается на следующую модель в ротации
+   */
+  rotateModel() {
+    this.modelIndex = (this.modelIndex + 1) % this.models.length;
+    console.log(`[AI] Переключаюсь на модель: ${this.models[this.modelIndex].name}`);
+    this.initModel();
+  }
+  
+  /**
+   * Выбирает модель на основе контекста и рейтинга кармы пользователя
+   * @param {Object} context - Контекст запроса
+   * @returns {string} Имя выбранной модели
+   */
+  selectModelByContext(context = {}) {
+    const { chatId, userId } = context;
+    let modelName = this.models[0].name; // По умолчанию первая модель
+    
+    try {
+      // Получаем профиль пользователя
+      const profile = storage.getProfile(chatId, userId);
+      
+      // Если это первое взаимодействие или высокий рейтинг кармы - используем более мощную модель
+      if (profile.isFirstInteraction || (profile.relationship >= 80)) {
+        modelName = this.models.find(m => m.priority === 'high')?.name || modelName;
+      } 
+      // Если низкий рейтинг кармы - используем более простую модель
+      else if (profile.relationship < 50) {
+        modelName = this.models.find(m => m.priority === 'low')?.name || modelName;
+      }
+      // Иначе используем модель по умолчанию
+      else {
+        modelName = this.models.find(m => m.priority === 'default')?.name || modelName;
+      }
+    } catch (error) {
+      console.error('Ошибка при выборе модели:', error);
+    }
+    
+    return modelName;
+  }
 
-  async executeWithRetry(apiCallFn, fallbackText = null) {
-    // Пробуем все ключи Gemini
-    for (let attempt = 0; attempt < this.keys.length; attempt++) {
+  /**
+   * Выполняет запрос к API с повторными попытками
+   * @param {Function} apiCallFn - Функция для вызова API
+   * @param {string} fallbackText - Текст для возврата в случае ошибки
+   * @param {Object} [context] - Контекст запроса (chatId, userId и т.д.)
+   * @returns {Promise<string>} Ответ от API или fallback-текст
+   */
+  async executeWithRetry(apiCallFn, fallbackText = null, context = {}) {
+    // Выбираем модель на основе контекста
+    const modelName = this.selectModelByContext(context);
+    if (modelName !== this.currentModel.name) {
+      this.initModel(modelName);
+    }
+    
+    // Пробуем все ключи Gemini и модели
+    for (let attempt = 0; attempt < this.keys.length * this.models.length; attempt++) {
       try {
-        return await apiCallFn();
+        const result = await apiCallFn();
+        return result;
       } catch (error) {
-        const isQuotaError = error.message.includes('429') || error.message.includes('Quota') || error.message.includes('Resource has been exhausted');
-        if (isQuotaError) {
-          this.rotateKey();
-          continue;
+        console.error(`[AI ERROR] Ошибка API (попытка ${attempt + 1}):`, error);
+        
+        // Если это не последняя попытка - пробуем следующий ключ или модель
+        if (attempt < this.keys.length * this.models.length - 1) {
+          if ((attempt + 1) % this.keys.length === 0) {
+            this.rotateModel(); // Пробуем следующую модель
+          } else {
+            this.rotateKey(); // Пробуем следующий ключ
+          }
         } else {
           throw error;
         }

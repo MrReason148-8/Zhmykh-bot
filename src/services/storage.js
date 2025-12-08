@@ -1,326 +1,289 @@
 const fs = require('fs');
 const path = require('path');
+const debounce = require('lodash.debounce');
 
+// Константы путей
 const DB_PATH = path.join(__dirname, '../../data/db.json');
 const INSTRUCTIONS_PATH = path.join(__dirname, '../../data/instructions.json');
 const PROFILES_PATH = path.join(__dirname, '../../data/profiles.json');
-const debounce = require('lodash.debounce');
+
+// Начальные значения по умолчанию
+const DEFAULT_PROFILE = {
+  realName: null,
+  facts: "",
+  attitude: "Нейтральное",
+  relationship: 80, // Начальный рейтинг кармы 80
+  isFirstInteraction: true,
+  lastInteraction: null
+};
 
 class StorageService {
   constructor() {
-    // Создаем отложенные функции сохранения (ждут 5 секунд тишины перед записью)
+    // Инициализация отложенного сохранения
     this.saveDebounced = debounce(this._saveToFile.bind(this), 5000);
     this.saveProfilesDebounced = debounce(this._saveProfilesToFile.bind(this), 5000);
-    this.data = { chats: {} };
+    
+    // Инициализация данных
+    this.data = { chats: {}, reminders: [] };
     this.profiles = {};
+    this.instructions = {};
 
-    // 1. Создаем структуру файлов, если их нет
-    this.ensureFile(DB_PATH, '{"chats": {}}');
+    // Создаем необходимые файлы, если их нет
+    this.ensureFile(DB_PATH, JSON.stringify(this.data));
     this.ensureFile(INSTRUCTIONS_PATH, '{}');
     this.ensureFile(PROFILES_PATH, '{}');
 
-    // 2. Загружаем данные в память
+    // Загружаем данные
     this.load();
   }
 
+  // === ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ===
+
+  /**
+   * Создает файл, если он не существует
+   * @param {string} filePath - Путь к файлу
+   * @param {string} defaultContent - Содержимое по умолчанию
+   */
   ensureFile(filePath, defaultContent) {
-    if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, defaultContent);
+    if (!fs.existsSync(path.dirname(filePath))) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    }
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, defaultContent, 'utf8');
+    }
   }
 
-
+  /**
+   * Загружает данные из файлов
+   */
   load() {
     try {
-      this.data = JSON.parse(fs.readFileSync(DB_PATH, 'utf-8'));
-      // Если базы напоминаний нет - создаем пустую
-      if (!this.data.reminders) this.data.reminders = [];
+      this.data = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
     } catch (e) {
-      console.error("Ошибка чтения DB, сброс.");
+      console.error('Ошибка загрузки данных:', e);
       this.data = { chats: {}, reminders: [] };
     }
-    // Грузим профили
+
     try {
-      this.profiles = JSON.parse(fs.readFileSync(PROFILES_PATH, 'utf-8'));
+      this.instructions = JSON.parse(fs.readFileSync(INSTRUCTIONS_PATH, 'utf8'));
     } catch (e) {
-      console.error("Ошибка чтения Profiles, сброс.");
+      console.error('Ошибка загрузки инструкций:', e);
+      this.instructions = {};
+    }
+
+    try {
+      this.profiles = JSON.parse(fs.readFileSync(PROFILES_PATH, 'utf8'));
+    } catch (e) {
+      console.error('Ошибка загрузки профилей:', e);
       this.profiles = {};
     }
   }
 
-  // === НАПОМИНАЛКИ (Новые методы) ===
+  // === СОХРАНЕНИЕ ДАННЫХ ===
 
-  addReminder(chatId, userId, username, timeIso, text) {
-    if (!this.data.reminders) this.data.reminders = [];
-
-    this.data.reminders.push({
-      id: Date.now() + Math.random(), // Уникальный ID
-      chatId,
-      userId,
-      username,
-      time: timeIso, // Время срабатывания (ISO string)
-      text: text
-    });
-    this.save();
-  }
-
-  // Получить задачи, время которых пришло
-  getPendingReminders() {
-    if (!this.data.reminders) return [];
-
-    // Берем текущее время как ЧИСЛО (миллисекунды с 1970 года)
-    const now = Date.now();
-
-    return this.data.reminders.filter(r => {
-      // Превращаем время из базы тоже в ЧИСЛО
-      const taskTime = new Date(r.time).getTime();
-
-      // Если время задачи меньше или равно текущему — пора слать!
-      return taskTime <= now;
-    });
-  }
-
-  // Удалить сработавшие задачи
-  removeReminders(ids) {
-    if (!this.data.reminders) return;
-    this.data.reminders = this.data.reminders.filter(r => !ids.includes(r.id));
-    this.save();
-  }
-
-  // Вызываем отложенную запись
-  save() {
-    this.saveDebounced();
-  }
-
-  saveProfiles() {
-    this.saveProfilesDebounced();
-  }
-
-  // Реальная физическая запись (синхронная, но редкая)
+  /**
+   * Сохраняет данные в файл
+   */
   _saveToFile() {
     try {
-      fs.writeFileSync(DB_PATH, JSON.stringify(this.data, null, 2));
-    } catch (e) { console.error("Ошибка записи DB:", e); }
+      fs.writeFileSync(DB_PATH, JSON.stringify(this.data, null, 2), 'utf8');
+    } catch (e) {
+      console.error('Ошибка сохранения данных:', e);
+    }
   }
 
+  /**
+   * Сохраняет профили в файл
+   */
   _saveProfilesToFile() {
     try {
-      fs.writeFileSync(PROFILES_PATH, JSON.stringify(this.profiles, null, 2));
-    } catch (e) { console.error("Ошибка записи Profiles:", e); }
+      fs.writeFileSync(PROFILES_PATH, JSON.stringify(this.profiles, null, 2), 'utf8');
+    } catch (e) {
+      console.error('Ошибка сохранения профилей:', e);
+    }
   }
 
-  // Принудительное сохранение (для выхода из процесса)
-  forceSave() {
-    this.saveDebounced.flush();
-    this.saveProfilesDebounced.flush();
-  }
-
-  // Проверка существования без создания (для уведомлений)
-  hasChat(chatId) {
-    return !!this.data.chats[chatId];
+  /**
+   * Сохраняет инструкции в файл
+   */
+  _saveInstructions() {
+    try {
+      fs.writeFileSync(INSTRUCTIONS_PATH, JSON.stringify(this.instructions, null, 2), 'utf8');
+    } catch (e) {
+      console.error('Ошибка сохранения инструкций:', e);
+    }
   }
 
   // === РАБОТА С ЧАТАМИ ===
 
+  /**
+   * Получает данные чата
+   * @param {string|number} chatId - ID чата
+   * @returns {Object} Данные чата
+   */
   getChat(chatId) {
     if (!this.data.chats[chatId]) {
-      this.data.chats[chatId] = { mutedTopics: [], users: {} };
-      this.save();
+      this.data.chats[chatId] = {
+        id: chatId,
+        title: `Чат ${chatId}`,
+        lastActive: new Date().toISOString(),
+        settings: {}
+      };
+      this.saveDebounced();
     }
     return this.data.chats[chatId];
   }
 
-  // Новый метод для обновления названия чата везде
-  updateChatName(chatId, name) {
-    if (!name) return;
-
-    // 1. Обновляем db.json
+  /**
+   * Обновляет данные чата
+   * @param {string|number} chatId - ID чата
+   * @param {Object} updates - Обновленные данные
+   */
+  updateChat(chatId, updates) {
     const chat = this.getChat(chatId);
-    if (chat.chatName !== name) {
-      chat.chatName = name;
-      this.save();
+    this.data.chats[chatId] = { ...chat, ...updates };
+    this.saveDebounced();
+  }
+
+  // === ПРОФИЛИ ПОЛЬЗОВАТЕЛЕЙ ===
+
+  /**
+   * Получить профиль пользователя или создать новый, если не существует
+   * @param {string|number} chatId - ID чата
+   * @param {string|number} userId - ID пользователя
+   * @param {boolean} [isFirstMessage=false] - Флаг первого сообщения пользователя
+   * @returns {Object} Профиль пользователя
+   */
+  getProfile(chatId, userId, isFirstMessage = false) {
+    // Инициализация чата, если его нет
+    if (!this.profiles[chatId]) {
+      this.profiles[chatId] = {};
     }
 
-    // 2. Обновляем profiles.json (добавляем метку, чтобы ты глазами видел)
-    if (!this.profiles[chatId]) this.profiles[chatId] = {};
-    // Используем спец-ключ с нижним подчеркиванием, чтобы не путать с юзерами
-    if (this.profiles[chatId]["_chatName"] !== name) {
-      this.profiles[chatId]["_chatName"] = name;
-      this.saveProfiles();
-    }
-  }
-
-  trackUser(chatId, user) {
-    if (user.is_bot) return;
-    const chat = this.getChat(chatId);
-    // Сохраняем юзернейм или имя для поиска
-    const name = user.username ? `@${user.username}` : (user.first_name || "Анон");
-
-    if (!chat.users[user.id] || chat.users[user.id] !== name) {
-      chat.users[user.id] = name;
-      this.save();
-    }
-  }
-
-  getRandomUser(chatId) {
-    const chat = this.getChat(chatId);
-    const ids = Object.keys(chat.users);
-    if (ids.length === 0) return null;
-    const randomId = ids[Math.floor(Math.random() * ids.length)];
-    return chat.users[randomId];
-  }
-
-  isTopicMuted(chatId, threadId) {
-    const chat = this.getChat(chatId);
-    // Исправление: проверяем именно на null/undefined, чтобы цифра 0 не превращалась в 'general'
-    let tid = (threadId === null || threadId === undefined) ? 'general' : threadId;
-
-    // Приводим все к строке для надежного сравнения
-    tid = String(tid);
-
-    return chat.mutedTopics.some(t => String(t) === tid);
-  }
-
-  toggleMute(chatId, threadId) {
-    const chat = this.getChat(chatId);
-    let tid = (threadId === null || threadId === undefined) ? 'general' : threadId;
-    tid = String(tid); // Сохраняем всегда как строку
-
-    const index = chat.mutedTopics.findIndex(t => String(t) === tid);
-
-    if (index > -1) {
-      chat.mutedTopics.splice(index, 1);
-      this.save();
-      return false; // Unmuted
-    } else {
-      chat.mutedTopics.push(tid);
-      this.save();
-      return true; // Muted
-    }
-  }
-
-
-  // === ИНСТРУКЦИИ (Только чтение) ===
-  getUserInstruction(username) {
-    if (!username) return "";
-    try {
-      if (fs.existsSync(INSTRUCTIONS_PATH)) {
-        // Читаем каждый раз заново для Hot Reload
-        const instructions = JSON.parse(fs.readFileSync(INSTRUCTIONS_PATH, 'utf-8'));
-        return instructions[username.toLowerCase()] || "";
-      }
-    } catch (e) { console.error("Ошибка инструкций:", e); }
-    return "";
-  }
-
-  // === ПРОФИЛИ (Психологические портреты) ===
-
-  // Получить один профиль (или заглушку)
-  getProfile(chatId, userId) {
-    if (!this.profiles[chatId]) this.profiles[chatId] = {};
-
+    // Создаем новый профиль, если его нет
     if (!this.profiles[chatId][userId]) {
-      // Дефолт: репутация 50
-      return { realName: null, facts: "", attitude: "Нейтральное", relationship: 50 };
+      const newProfile = { ...DEFAULT_PROFILE };
+      this.profiles[chatId][userId] = newProfile;
+      this.saveProfilesDebounced();
+      return newProfile;
     }
-    // Если профиль есть, но поле relationship старое (нет его) — добавим 50
-    const p = this.profiles[chatId][userId];
-    if (typeof p.relationship === 'undefined') p.relationship = 50;
 
-    return p;
+    const profile = this.profiles[chatId][userId];
+    
+    // Обновляем флаг первого взаимодействия
+    if (isFirstMessage && profile.isFirstInteraction) {
+      profile.isFirstInteraction = false;
+      profile.lastInteraction = new Date().toISOString();
+      this.saveProfilesDebounced();
+    }
+    
+    // Убедимся, что все обязательные поля есть в профиле
+    const mergedProfile = { ...DEFAULT_PROFILE, ...profile };
+    this.profiles[chatId][userId] = mergedProfile;
+    
+    return mergedProfile;
   }
 
-  // Получить пачку профилей (для анализатора)
+  /**
+   * Получить несколько профилей пользователей
+   * @param {string|number} chatId - ID чата
+   * @param {Array<string|number>} userIds - Массив ID пользователей
+   * @returns {Object} Объект с профилями пользователей
+   */
   getProfilesForUsers(chatId, userIds) {
     const result = {};
-    if (!this.profiles[chatId]) return {};
+    if (!this.profiles[chatId]) {
+      this.profiles[chatId] = {};
+    }
 
-    userIds.forEach(uid => {
-      if (this.profiles[chatId][uid]) {
-        result[uid] = this.profiles[chatId][uid];
-      }
-    });
+    // Получаем профиль для каждого пользователя
+    for (const userId of userIds) {
+      result[userId] = this.getProfile(chatId, userId);
+    }
+    
     return result;
   }
 
-  // Массовое обновление (после анализа)
+  /**
+   * Массовое обновление профилей
+   * @param {string|number} chatId - ID чата
+   * @param {Object} updatesMap - Объект с обновлениями профилей
+   */
   bulkUpdateProfiles(chatId, updatesMap) {
-    if (!this.profiles[chatId]) this.profiles[chatId] = {};
+    if (!this.profiles[chatId]) {
+      this.profiles[chatId] = {};
+    }
 
+    const updatedProfiles = [];
+    
     for (const [userId, data] of Object.entries(updatesMap)) {
-      const current = this.profiles[chatId][userId] || { realName: null, facts: "", attitude: "Нейтральное", relationship: 50 };
-
-      if (data.realName && data.realName !== "Неизвестно") current.realName = data.realName;
-      if (data.facts) current.facts = data.facts;
-      if (data.attitude) current.attitude = data.attitude;
-
-      // === ДОБАВЛЯЕМ ЭТУ СТРОКУ ===
+      // Получаем текущий профиль или создаем новый
+      const current = this.getProfile(chatId, userId);
+      
+      // Обновляем данные профиля
+      if (data.realName && data.realName !== "Неизвестно") {
+        current.realName = data.realName;
+      }
+      
+      if (data.facts) {
+        current.facts = data.facts;
+      }
+      
+      if (data.attitude) {
+        current.attitude = data.attitude;
+      }
+      
       if (data.relationship !== undefined) {
         const score = parseInt(data.relationship, 10);
-        if (!isNaN(score)) current.relationship = score;
+        if (!isNaN(score)) {
+          // Ограничиваем значение кармы от 0 до 100
+          current.relationship = Math.max(0, Math.min(100, score));
+        }
       }
-
-      this.profiles[chatId][userId] = current;
+      
+      // Обновляем время последнего взаимодействия
+      current.lastInteraction = new Date().toISOString();
+      
+      updatedProfiles.push(userId);
     }
-    this.saveProfiles();
+    
+    // Сохраняем изменения
+    if (updatedProfiles.length > 0) {
+      this.saveProfilesDebounced();
+    }
+    
+    return updatedProfiles;
   }
 
-  // === СОРЕВНОВАТЕЛЬНАЯ СТАТИСТИКА ===
+  // === ИНСТРУКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ===
 
-  incrementDebateWin(chatId, userId) {
-    if (!this.profiles[chatId]) this.profiles[chatId] = {};
-    const p = this.getProfile(chatId, userId);
-
-    if (!p.debateWins) p.debateWins = 0;
-    p.debateWins += 1;
-
-    this.profiles[chatId][userId] = p;
-    this.saveProfiles();
+  /**
+   * Получить инструкцию пользователя
+   * @param {string|number} userId - ID пользователя
+   * @returns {Promise<string>} Инструкция пользователя
+   */
+  async getUserInstruction(userId) {
+    try {
+      if (this.instructions[userId]) {
+        return this.instructions[userId];
+      }
+      return "";
+    } catch (e) {
+      console.error("Ошибка получения инструкции:", e);
+      return "";
+    }
   }
 
-  getDebateLeaderboard(chatId) {
-    if (!this.profiles[chatId]) return [];
-
-    // Превращаем объект в массив [ {name, wins}, ... ]
-    const list = Object.entries(this.profiles[chatId])
-      .filter(([key, val]) => !key.startsWith('_')) // Игнорим метаданные чата
-      .map(([uid, profile]) => {
-        const chat = this.getChat(chatId);
-        const name = profile.realName || chat.users[uid] || "Анон";
-        return { name, wins: profile.debateWins || 0 };
-      });
-
-    // Сортируем: у кого больше побед — тот выше
-    return list
-      .filter(u => u.wins > 0)
-      .sort((a, b) => b.wins - a.wins)
-      .slice(0, 10); // Топ-10
-  }
-
-  // Поиск профиля по тексту ("расскажи про @vetaone" или "про Виталия")
-  findProfileByQuery(chatId, query) {
-    if (!this.profiles[chatId]) return null;
-    const chat = this.getChat(chatId);
-    const q = query.toLowerCase().replace('@', ''); // убираем собаку для поиска
-
-    // 1. Пробуем найти по ID, перебирая users из db.json
-    for (const [uid, usernameRaw] of Object.entries(chat.users)) {
-      if (usernameRaw.toLowerCase().includes(q)) {
-        // Нашли ID по нику, возвращаем профиль (даже если он пустой, создадим на лету для ответа)
-        const p = this.getProfile(chatId, uid);
-        return { ...p, username: usernameRaw };
-      }
-    }
-
-    // 2. Если по нику не нашли, ищем внутри профилей по realName
-    for (const [uid, profile] of Object.entries(this.profiles[chatId])) {
-      if (profile.realName && profile.realName.toLowerCase().includes(q)) {
-        const usernameRaw = chat.users[uid] || "Unknown";
-        return { ...profile, username: usernameRaw };
-      }
-    }
-
-    return null;
+  /**
+   * Установить инструкцию пользователя
+   * @param {string|number} userId - ID пользователя
+   * @param {string} instruction - Текст инструкции
+   */
+  setUserInstruction(userId, instruction) {
+    this.instructions[userId] = instruction;
+    this._saveInstructions();
   }
 }
 
+// Экспортируем синглтон
 module.exports = new StorageService();
