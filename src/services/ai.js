@@ -117,31 +117,11 @@ class AiService {
   }
 
   /**
-   * Получает текст запроса для OpenRouter
-   * @param {Function} apiCallFn - Функция для вызова API
-   * @returns {Promise<string>} Текст запроса
-   */
-  async getPromptForOpenRouter(apiCallFn) {
-    try {
-      // Пробуем выполнить оригинальный запрос, чтобы получить текст
-      const result = await apiCallFn();
-      if (result?.response?.text) {
-        const text = await result.response.text();
-        if (text) return text;
-      }
-      return 'Привет! Как дела?';
-    } catch (e) {
-      console.error('Ошибка при получении промпта для OpenRouter:', e);
-      return 'Привет! Как дела?';
-    }
-  }
-
-  /**
    * Выполняет запрос к API с повторными попытками
    * @param {Function} apiCallFn - Функция для вызова API
    * @param {string} [fallbackText] - Текст для возврата в случае ошибки
    * @param {Object} [context] - Контекст запроса (chatId, userId и т.д.)
-   * @returns {Promise<Object>} Ответ от API
+   * @returns {Promise<string>} Ответ от API
    */
   async executeWithRetry(apiCallFn, fallbackText = null, context = {}) {
     const maxAttempts = this.keys.length * this.models.length * 2; // Максимальное количество попыток
@@ -150,30 +130,8 @@ class AiService {
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        // Проверяем, используем ли мы OpenRouter
-        if (this.currentModel.provider === 'openrouter') {
-          // Для OpenRouter используем специальную логику вызова
-          const prompt = await this.getPromptForOpenRouter(apiCallFn);
-          const response = await this.callOpenRouter({
-            model: this.currentModel.name,
-            messages: [
-              {
-                role: 'system',
-                content: 'Ты - Жмых, остроумный и саркастичный бот. Отвечай кратко и с юмором.'
-              },
-              {
-                role: 'user',
-                content: prompt
-              }
-            ],
-            temperature: this.currentModel.generationConfig?.temperature || 0.8,
-            max_tokens: this.currentModel.generationConfig?.max_tokens || 1000
-          });
-          return { response: { text: () => response.choices[0].message.content } };
-        } else {
-          // Для Gemini используем стандартный вызов
-          return await apiCallFn();
-        }
+        // Просто выполняем переданную функцию
+        return await apiCallFn();
       } catch (error) {
         console.error(`[AI ERROR] Ошибка API (попытка ${attempt + 1}):`, error.message);
         lastError = error;
@@ -341,9 +299,8 @@ class AiService {
       console.log(`[DEBUG AI] Отправляю запрос...`);
 
       let text = '';
-      
-      let response; // Объявляем переменную response здесь, чтобы она была доступна в скоупе
-      
+      let response = {}; // Инициализируем response для доступа к метаданным
+
       // Проверяем, используем ли мы OpenRouter
       if (this.currentModel.provider === 'openrouter') {
         const openRouterResponse = await this.callOpenRouter({
@@ -355,28 +312,18 @@ class AiService {
             },
             {
               role: 'user',
-              content: promptParts.map(p => p.text).join('\n')
+              content: fullPromptText // Для OpenRouter передаем весь промпт как текст
             }
           ],
-          temperature: 0.8,
-          max_tokens: 1000
+          temperature: this.currentModel.generationConfig?.temperature || 0.8,
+          max_tokens: this.currentModel.generationConfig?.max_tokens || 1000
         });
         text = openRouterResponse.choices[0].message.content;
-        // Создаем совместимый объект response для OpenRouter
-        response = {
-          candidates: [{
-            groundingMetadata: null
-          }]
-        };
+        // У OpenRouter нет метаданных для источников, поэтому создаем пустой массив
+        response.candidates = [];
       } else {
         // Используем Gemini API для других провайдеров
-        const result = await this.model.generateContent({
-          contents: [{ role: 'user', parts: promptParts }],
-          generationConfig: {
-            maxOutputTokens: 2500,
-            temperature: 0.9
-          }
-        });
+        const result = await this.model.generateContent({ contents: [{ role: 'user', parts: promptParts }] });
         response = result.response;
         text = response.text();
       }
@@ -408,23 +355,10 @@ class AiService {
     };
 
     try {
-      const result = await this.executeWithRetry(requestLogic, currentMessage.text);
-
-      // Проверяем, является ли результат объектом от executeWithRetry (OpenRouter)
-      if (typeof result === 'object' && result !== null && result.response && typeof result.response.text === 'function') {
-        return result.response.text();
-      }
-
-      // Если это уже строка (от Gemini или fallback), просто возвращаем ее
-      if (typeof result === 'string') {
-        return result;
-      }
-
-      // Если результат не является ни строкой, ни ожидаемым объектом, возвращаем fallback
-      return "Я запутался и не знаю, что ответить.";
-
+      // executeWithRetry теперь всегда возвращает строку
+      return await this.executeWithRetry(requestLogic, "Не знаю, что сказать.");
     } catch (e) {
-      console.error(`[CRITICAL AI ERROR]: ${e}`);
+      console.error(`[CRITICAL AI ERROR]: ${e.message}`);
       return "У меня что-то сломалось в башке. Попробуй позже.";
     }
   }
