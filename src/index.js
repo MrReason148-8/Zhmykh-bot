@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const config = require('./config');
 const logic = require('./core/logic');
 const storage = require('./services/storage');
+const ai = require('./services/ai');
 
 // Создаем бота
 const bot = new TelegramBot(config.telegramToken, { polling: true });
@@ -105,6 +106,14 @@ bot.on('message', async (msg) => {
     const history = logic.chatHistory[chatId] || [];
     const summary = await ai.getDailySummary(history);
     await bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  // Обработка команд для разрешения споров
+  if (msg.text && (msg.text.startsWith('/рассуди') || msg.text.startsWith('/рассуди_спор') || msg.text.startsWith('/кто_прав'))) {
+    const history = logic.chatHistory[chatId] || [];
+    const verdict = await ai.getJudgeDebate(history);
+    await bot.sendMessage(chatId, verdict, { parse_mode: 'Markdown' });
     return;
   }
 

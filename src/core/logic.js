@@ -166,6 +166,52 @@ const analyzeAndUpdateKarma = (text, chatId, userId) => {
   }
 };
 
+// Функция для проверки наличия админа в чате
+const isAdminInChat = async (bot, chatId) => {
+  try {
+    const chatMembers = await bot.getChatAdministrators(chatId);
+    return chatMembers.some(member => member.user.id === config.adminId);
+  } catch (error) {
+    console.error('[ADMIN CHECK ERROR]:', error.message);
+    return false;
+  }
+};
+
+// Функция для определения, нужно ли отвечать на сообщение
+const shouldAnswerToMessage = async (text, chatId, userId) => {
+  const lowerText = text.toLowerCase();
+  
+  // 1. Проверяем прямое обращение к боту
+  const botTriggers = ['жмых', 'zhmykh', 'бот', 'бота', 'боту'];
+  const hasDirectTrigger = botTriggers.some(trigger => lowerText.includes(trigger));
+  
+  // 2. Проверяем, является ли это ответом на сообщение бота
+  const history = chatHistory[chatId] || [];
+  const lastBotMessage = history.length > 0 ? history[history.length - 1] : null;
+  const isReplyToBot = lastBotMessage && lastBotMessage.role === 'assistant';
+  
+  // 3. Проверяем команды
+  const isCommand = text.startsWith('/');
+  
+  // 4. Проверяем первое взаимодействие
+  const profile = storage.getProfile(chatId, userId);
+  const isFirstInteraction = profile.isFirstInteraction;
+  
+  // ВСЕГДА отвечаем при прямом обращении, команде или первом взаимодействии
+  if (hasDirectTrigger || isCommand || isFirstInteraction || isReplyToBot) {
+    console.log(`[RESPONSE DECISION] Always respond: trigger=${hasDirectTrigger}, command=${isCommand}, first=${isFirstInteraction}, reply=${isReplyToBot}`);
+    return true;
+  }
+  
+  // 5. Спонтанные ответы с вероятностью 2-4%
+  const spontaneousChance = 0.02 + Math.random() * 0.02; // 2-4%
+  const shouldRespondSpontaneously = Math.random() < spontaneousChance;
+  
+  console.log(`[RESPONSE DECISION] Spontaneous: ${shouldRespondSpontaneously} (chance: ${(spontaneousChance * 100).toFixed(1)}%)`);
+  
+  return shouldRespondSpontaneously;
+};
+
 // Обработка сообщения
 const processMessage = async (bot, msg) => {
   try {
@@ -181,33 +227,54 @@ const processMessage = async (bot, msg) => {
     
     // Проверяем лимит сообщений
     if (!karmaUtils.checkMessageLimit(chatId, userId)) {
-      console.log(`[ANTI-SPAM] User ${userId} in chat ${chatId} exceeded daily message limit`);
+      try {
+        await bot.sendMessage(chatId, "Ты достиг лимит сообщений на сегодня. Попробуй завтра.", {
+          reply_to_message_id: msg.message_id
+        });
+      } catch (e) {
+        console.error("Не удалось отправить сообщение о лимите:", e);
+      }
       return;
     }
     
-    // Обрабатываем первое взаимодействие
-    const isFirstInteraction = await karmaUtils.handleFirstInteraction(chatId, userId, bot, msg);
+    // === СОХРАНЕНИЕ СООБЩЕНИЯ В ИСТОРИЮ ===
+    // Сохраняем ВСЕ сообщения пользователей в историю
+    if (!chatHistory[chatId]) {
+      chatHistory[chatId] = [];
+    }
+    chatHistory[chatId].push({
+      role: 'user',
+      text: text,
+      userId: userId,
+      sender: msg.from.first_name || 'Пользователь',
+      timestamp: new Date().toISOString()
+    });
     
-    // Анализируем сообщение и обновляем карму
+    // Ограничиваем размер истории (последние 200 сообщений)
+    if (chatHistory[chatId].length > 200) {
+      chatHistory[chatId] = chatHistory[chatId].slice(-200);
+    }
+    
+    // Анализируем сообщение на предмет изменения кармы
     analyzeAndUpdateKarma(text, chatId, userId);
     
-    // Получаем профиль пользователя для контекста
+    // Получаем профиль пользователя
     const profile = storage.getProfile(chatId, userId);
-    const context = {
-      chatId,
-      userId,
-      isFirstInteraction,
-      relationship: profile.relationship,
-      karmaLevel: karmaUtils.getKarmaLevel(profile.relationship)
-    };
+    const isFirstInteraction = profile.isFirstInteraction;
     
     // Задержка ответа в зависимости от кармы
     await delayResponse(profile);
     
-    // Получаем ответ от ИИ, только если есть текст
-    if (text) {
+    // Проверяем, нужно ли отвечать на сообщение
+    const shouldRespond = await shouldAnswerToMessage(text, chatId, userId);
+    
+    // Получаем ответ от ИИ, только если есть текст и нужно ответить
+    if (text && shouldRespond) {
       let aiResponse;
       try {
+        // Проверяем, есть ли админ в чате
+        const adminInChat = await isAdminInChat(bot, chatId);
+        
         // Формируем объект currentMessage для передачи в getResponse
         const currentMessage = {
           text: text,
@@ -218,8 +285,11 @@ const processMessage = async (bot, msg) => {
         // Получаем историю чата
         const history = chatHistory[chatId] || [];
 
+        // Добавляем информацию о наличии админа в userInstruction
+        const adminInstruction = adminInChat ? "В ЧАТЕ ЕСТЬ АДМИН - будь более сдержанным" : "";
+
         // Правильный вызов getResponse (profile на 6-й позиции)
-        aiResponse = await ai.getResponse(history, currentMessage, null, null, "", profile);
+        aiResponse = await ai.getResponse(history, currentMessage, null, null, adminInstruction, profile);
       
       // === ФОРМАТИРОВАНИЕ И ОТПРАВКА ===
       
@@ -302,39 +372,23 @@ const processMessage = async (bot, msg) => {
       const errorMsg = `🔥 **Ошибка ИИ!**\n\nЧат: ${msg.chat?.title || 'ЛС'}\nОшибка: \`${err.message}\``;
       await bot.sendMessage(config.adminId, errorMsg, { parse_mode: 'Markdown' }).catch(console.error);
       
-      // Отправляем пользователю сообщение об ошибке
-      try {
-        await bot.sendMessage(chatId, "Что-то пошло не так. Давай попробуем ещё раз?", {
-          reply_to_message_id: msg.message_id
-        });
-      } catch (e) {
-        console.error("Не удалось отправить сообщение об ошибке пользователю:", e);
-      }
+      // Отправляем пользователю сообщение об ошибке (ЗАКОММЕНТИРОВАНО - только админу)
+      // try {
+      //   await bot.sendMessage(chatId, "Что-то пошло не так. Давай попробуем ещё раз?", {
+      //     reply_to_message_id: msg.message_id
+      //   });
+      // } catch (e) {
+      //   console.error("Не удалось отправить сообщение об ошибке пользователю:", e);
+      // }
     }
   } // <--- Вот здесь закрывается блок if (text)
-
-    // === СПОНТАННАЯ РЕАКЦИЯ (с вероятностью 10%) ===
-    if (Math.random() < 0.1) {
-      try {
-        const history = chatHistory[chatId] || [];
-        const reaction = await ai.getSpontaneousReaction(history);
-        if (reaction) {
-          await bot.sendMessage(chatId, reaction);
-          // Запоминаем, что последним действием была спонтанная реакция
-          if (!chatHistory[chatId]) chatHistory[chatId] = [];
-          chatHistory[chatId].push({ role: 'assistant', text: reaction, type: 'spontaneous_reaction' });
-        }
-      } catch (spontErr) {
-        console.error("[SPONTANEOUS REACTION ERROR]", spontErr.message);
-      }
-    }
 
     // === СПОНТАННАЯ МЫСЛЬ ===
     if (!messageCounter[chatId]) messageCounter[chatId] = 0;
     messageCounter[chatId]++;
 
-    // Проверяем, не пора ли вставить свое слово (раз в 30-50 сообщений)
-    if (messageCounter[chatId] > (30 + Math.random() * 20)) {
+    // Проверяем, не пора ли вставить свое слово (раз в 100-150 сообщений)
+    if (messageCounter[chatId] > (100 + Math.random() * 50)) {
       try {
         const history = chatHistory[chatId] || [];
         const thought = await ai.getSpontaneousThought(history);
@@ -376,14 +430,14 @@ const processMessage = async (bot, msg) => {
   } catch (error) {
     console.error("[PROCESS MESSAGE ERROR]:", error);
     
-    // Пытаемся отправить сообщение об ошибке в чат
-    try {
-      await bot.sendMessage(msg.chat.id, "Произошла ошибка при обработке сообщения. Пожалуйста, попробуйте ещё раз.", {
-        reply_to_message_id: msg.message_id
-      });
-    } catch (e) {
-      console.error("Не удалось отправить сообщение об ошибке:", e);
-    }
+    // Пытаемся отправить сообщение об ошибке в чат (ЗАКОММЕНТИРОВАНО - только админу)
+    // try {
+    //   await bot.sendMessage(msg.chat.id, "Произошла ошибка при обработке сообщения. Пожалуйста, попробуйте ещё раз.", {
+    //     reply_to_message_id: msg.message_id
+    //   });
+    // } catch (e) {
+    //   console.error("Не удалось отправить сообщение об ошибке:", e);
+    // }
     
     // Отправляем уведомление админу
     try {
