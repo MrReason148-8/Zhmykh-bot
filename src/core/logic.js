@@ -386,8 +386,7 @@ const processMessage = async (bot, msg) => {
       // Отправляем каждый кусок сообщения
       for (const chunk of chunks) {
         await bot.sendMessage(chatId, chunk, { 
-          reply_to_message_id: msg.message_id,
-          parse_mode: 'Markdown'
+          reply_to_message_id: msg.message_id
         });
       }
 
@@ -425,7 +424,7 @@ const processMessage = async (bot, msg) => {
       
       // Отправляем уведомление админу
       const errorMsg = `🔥 **Ошибка ИИ!**\n\nЧат: ${msg.chat?.title || 'ЛС'}\nОшибка: \`${err.message}\``;
-      await bot.sendMessage(config.adminId, errorMsg, { parse_mode: 'Markdown' }).catch(console.error);
+      await bot.sendMessage(config.adminId, errorMsg).catch(console.error);
       
       // Отправляем пользователю сообщение об ошибке (ЗАКОММЕНТИРОВАНО - только админу)
       // try {
@@ -500,8 +499,7 @@ const processMessage = async (bot, msg) => {
         config.adminId,
         `⚠️ **Ошибка в processMessage**\n` +
         `Чат: ${msg.chat?.title || 'ЛС'}\n` +
-        `Ошибка: \`${error.message}\``,
-        { parse_mode: 'Markdown' }
+        `Ошибка: \`${error.message}\``
       );
     } catch (e) {
       console.error("Не удалось отправить уведомление админу:", e);
