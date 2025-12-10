@@ -250,6 +250,8 @@ const processMessage = async (bot, msg) => {
       timestamp: new Date().toISOString()
     });
     
+    console.log(`[HISTORY] Saved message for chat ${chatId}. Total: ${chatHistory[chatId].length}`);
+    
     // Ограничиваем размер истории (последние 200 сообщений)
     if (chatHistory[chatId].length > 200) {
       chatHistory[chatId] = chatHistory[chatId].slice(-200);
@@ -347,6 +349,8 @@ const processMessage = async (bot, msg) => {
         text: aiResponse,
         timestamp: new Date().toISOString()
       });
+      
+      console.log(`[HISTORY] Saved bot response for chat ${chatId}. Total: ${chatHistory[chatId].length}`);
 
       // Определяем вероятность реакции
       const hasExistingReactions = msg.reactions && msg.reactions.length > 0;
