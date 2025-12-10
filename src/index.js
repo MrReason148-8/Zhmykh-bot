@@ -109,7 +109,7 @@ bot.on('message', async (msg) => {
       console.log(`[SUMMARY] Last messages:`, history.slice(-3).map(h => `${h.role}: ${h.text.substring(0, 30)}...`));
     }
     const summary = await ai.getDailySummary(history);
-    await bot.sendMessage(chatId, summary, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, summary);
     return;
   }
 
@@ -117,7 +117,7 @@ bot.on('message', async (msg) => {
   if (msg.text && (msg.text.startsWith('/рассуди') || msg.text.startsWith('/рассуди_спор') || msg.text.startsWith('/кто_прав'))) {
     const history = logic.chatHistory[chatId] || [];
     const verdict = await ai.getJudgeDebate(history);
-    await bot.sendMessage(chatId, verdict, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, verdict);
     return;
   }
 
