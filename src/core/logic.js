@@ -171,46 +171,60 @@ const loadChatHistory = async (bot, chatId) => {
   try {
     console.log(`[HISTORY] Loading history for chat ${chatId}...`);
     
-    // Получаем последние 100 сообщений через getUpdates
-    const updates = await bot.getUpdates({
-      offset: -100,
-      limit: 100,
-      timeout: 0
-    });
-    
     if (!chatHistory[chatId]) {
       chatHistory[chatId] = [];
     }
     
-    chatHistory[chatId] = []; // Очищаем старую историю
+    // Загружаем накопительную историю из файла (последние 2000 сообщений для памяти)
+    const fileHistory = storage.loadChatHistory(chatId, 2000);
     
-    // Фильтруем сообщения для этого чата
-    const chatMessages = updates
-      .filter(update => update.message && update.message.chat.id === chatId)
-      .map(update => update.message)
-      .reverse(); // От старых к новым
-    
-    for (const msg of chatMessages) {
-      if (msg.text && msg.from) {
-        // Определяем роль
-        const isBotMessage = msg.from.username === bot.options.username || msg.from.is_bot;
-        
-        chatHistory[chatId].push({
-          role: isBotMessage ? 'assistant' : 'user',
-          text: msg.text,
-          userId: msg.from.id,
-          sender: msg.from.first_name || 'Пользователь',
-          timestamp: new Date(msg.date * 1000).toISOString()
-        });
+    // Загружаем последние сообщения из Telegram API (если есть)
+    try {
+      const updates = await bot.getUpdates({
+        offset: -100,
+        limit: 100,
+        timeout: 0
+      });
+      
+      const telegramMessages = updates
+        .filter(update => update.message && update.message.chat.id === chatId)
+        .map(update => update.message)
+        .reverse();
+      
+      for (const msg of telegramMessages) {
+        if (msg.text && msg.from) {
+          const isBotMessage = msg.from.username === bot.options.username || msg.from.is_bot;
+          
+          const message = {
+            role: isBotMessage ? 'assistant' : 'user',
+            text: msg.text,
+            userId: msg.from.id,
+            sender: msg.from.first_name || 'Пользователь',
+            timestamp: new Date(msg.date * 1000).toISOString()
+          };
+          
+          // Добавляем только если нет в файловой истории
+          const exists = fileHistory.some(h => 
+            h.text === message.text && 
+            Math.abs(new Date(h.timestamp) - new Date(message.timestamp)) < 5000
+          );
+          
+          if (!exists) {
+            fileHistory.push(message);
+            // Сохраняем новые сообщения в файл
+            storage.addChatMessage(chatId, message);
+          }
+        }
       }
+    } catch (apiError) {
+      console.warn(`[HISTORY] Could not load from Telegram API: ${apiError.message}`);
     }
     
-    console.log(`[HISTORY] Loaded ${chatHistory[chatId].length} messages for chat ${chatId}`);
+    // Устанавливаем историю в памяти (последние 200 сообщений)
+    chatHistory[chatId] = fileHistory.slice(-200);
     
-    // Ограничиваем до 200 сообщений
-    if (chatHistory[chatId].length > 200) {
-      chatHistory[chatId] = chatHistory[chatId].slice(-200);
-    }
+    const stats = storage.getChatHistoryStats(chatId);
+    console.log(`[HISTORY] Loaded ${chatHistory[chatId].length} messages to memory, ${stats.totalMessages} total in file for chat ${chatId}`);
     
   } catch (error) {
     console.error(`[HISTORY] Error loading history for chat ${chatId}:`, error.message);
@@ -289,21 +303,27 @@ const processMessage = async (bot, msg) => {
     }
     
     // === СОХРАНЕНИЕ СООБЩЕНИЯ В ИСТОРИЮ ===
-    // Сохраняем ВСЕ сообщения пользователей в историю
+    // Сохраняем ВСЕ сообщения пользователей в историю и в файл
     if (!chatHistory[chatId]) {
       chatHistory[chatId] = [];
     }
-    chatHistory[chatId].push({
+    
+    const userMessage = {
       role: 'user',
       text: text,
       userId: userId,
       sender: msg.from.first_name || 'Пользователь',
       timestamp: new Date().toISOString()
-    });
+    };
+    
+    chatHistory[chatId].push(userMessage);
+    
+    // Сохраняем в файл для накопительной истории
+    storage.addChatMessage(chatId, userMessage);
     
     console.log(`[HISTORY] Saved message for chat ${chatId}. Total: ${chatHistory[chatId].length}`);
     
-    // Ограничиваем размер истории (последние 200 сообщений)
+    // Ограничиваем размер истории в памяти (последние 200 сообщений)
     if (chatHistory[chatId].length > 200) {
       chatHistory[chatId] = chatHistory[chatId].slice(-200);
     }
@@ -390,15 +410,21 @@ const processMessage = async (bot, msg) => {
         });
       }
 
-      // Добавляем в историю чата
+      // Добавляем в историю чата и в файл
       if (!chatHistory[chatId]) {
         chatHistory[chatId] = [];
       }
-      chatHistory[chatId].push({
+      
+      const botMessage = {
         role: 'assistant',
         text: aiResponse,
         timestamp: new Date().toISOString()
-      });
+      };
+      
+      chatHistory[chatId].push(botMessage);
+      
+      // Сохраняем в файл для накопительной истории
+      storage.addChatMessage(chatId, botMessage);
       
       console.log(`[HISTORY] Saved bot response for chat ${chatId}. Total: ${chatHistory[chatId].length}`);
 

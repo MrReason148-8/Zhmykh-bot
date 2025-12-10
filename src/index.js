@@ -103,12 +103,16 @@ bot.on('message', async (msg) => {
 
   // Обработка команды /summary
   if (msg.text && msg.text.startsWith('/summary')) {
-    const history = logic.chatHistory[chatId] || [];
-    console.log(`[SUMMARY] History for chat ${chatId}: ${history.length} messages`);
-    if (history.length > 0) {
-      console.log(`[SUMMARY] Last messages:`, history.slice(-3).map(h => `${h.role}: ${h.text.substring(0, 30)}...`));
+    // Загружаем полную историю из файла (без ограничений)
+    const fullHistory = storage.loadChatHistory(chatId, null);
+    const memoryHistory = logic.chatHistory[chatId] || [];
+    
+    console.log(`[SUMMARY] History for chat ${chatId}: ${memoryHistory.length} in memory, ${fullHistory.length} total in file`);
+    if (fullHistory.length > 0) {
+      console.log(`[SUMMARY] Last messages:`, fullHistory.slice(-3).map(h => `${h.role}: ${h.text.substring(0, 30)}...`));
     }
-    const summary = await ai.getDailySummary(history);
+    
+    const summary = await ai.getDailySummary(fullHistory);
     await bot.sendMessage(chatId, summary);
     return;
   }

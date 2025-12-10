@@ -326,6 +326,93 @@ class StorageService {
     this.instructions[userId] = instruction;
     this._saveInstructions();
   }
+
+  /**
+   * Добавить сообщение в историю чата
+   * @param {string|number} chatId - ID чата
+   * @param {Object} message - Объект сообщения
+   */
+  addChatMessage(chatId, message) {
+    const historyPath = path.join(__dirname, '../../data/chat_history');
+    
+    // Создаем папку, если нет
+    if (!fs.existsSync(historyPath)) {
+      fs.mkdirSync(historyPath, { recursive: true });
+    }
+    
+    const filePath = path.join(historyPath, `${chatId}.jsonl`);
+    
+    // Добавляем сообщение в конец файла (JSONL формат - одна строка JSON)
+    const messageWithTimestamp = {
+      ...message,
+      saved_at: new Date().toISOString()
+    };
+    
+    fs.appendFileSync(filePath, JSON.stringify(messageWithTimestamp) + '\n');
+  }
+
+  /**
+   * Загрузить историю чата
+   * @param {string|number} chatId - ID чата
+   * @param {number} limit - Лимит сообщений (null = без ограничений)
+   * @returns {Array} Массив сообщений
+   */
+  loadChatHistory(chatId, limit = null) {
+    const filePath = path.join(__dirname, '../../data/chat_history', `${chatId}.jsonl`);
+    
+    try {
+      if (!fs.existsSync(filePath)) {
+        return [];
+      }
+      
+      const content = fs.readFileSync(filePath, 'utf8');
+      const lines = content.trim().split('\n').filter(line => line);
+      
+      // Парсим JSON
+      const messages = lines.map(line => JSON.parse(line));
+      
+      // Если лимит не указан, возвращаем все сообщения
+      if (limit === null) {
+        return messages;
+      }
+      
+      // Иначе берем последние limit сообщений
+      return messages.slice(-limit);
+      
+    } catch (error) {
+      console.error(`Error loading chat history for ${chatId}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Получить статистику истории чата
+   * @param {string|number} chatId - ID чата
+   * @returns {Object} Статистика
+   */
+  getChatHistoryStats(chatId) {
+    const filePath = path.join(__dirname, '../../data/chat_history', `${chatId}.jsonl`);
+    
+    try {
+      if (!fs.existsSync(filePath)) {
+        return { totalMessages: 0, fileSize: 0 };
+      }
+      
+      const stats = fs.statSync(filePath);
+      const content = fs.readFileSync(filePath, 'utf8');
+      const lines = content.trim().split('\n').filter(line => line);
+      
+      return {
+        totalMessages: lines.length,
+        fileSize: stats.size,
+        lastModified: stats.mtime
+      };
+      
+    } catch (error) {
+      console.error(`Error getting chat history stats for ${chatId}:`, error);
+      return { totalMessages: 0, fileSize: 0 };
+    }
+  }
 }
 
 // Экспортируем синглтон
