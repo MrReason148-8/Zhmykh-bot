@@ -166,6 +166,50 @@ const analyzeAndUpdateKarma = (text, chatId, userId) => {
   }
 };
 
+// Функция для загрузки истории чата при старте
+const loadChatHistory = async (bot, chatId) => {
+  try {
+    console.log(`[HISTORY] Loading history for chat ${chatId}...`);
+    
+    // Получаем последние 100 сообщений
+    const messages = await bot.getChatHistory(chatId, { limit: 100 });
+    
+    if (!chatHistory[chatId]) {
+      chatHistory[chatId] = [];
+    }
+    
+    chatHistory[chatId] = []; // Очищаем старую историю
+    
+    // Обрабатываем сообщения в обратном порядке (от старых к новым)
+    const reversedMessages = messages.reverse();
+    
+    for (const msg of reversedMessages) {
+      if (msg.text && msg.from) {
+        // Определяем роль
+        const isBotMessage = msg.from.username === bot.options.username || msg.from.is_bot;
+        
+        chatHistory[chatId].push({
+          role: isBotMessage ? 'assistant' : 'user',
+          text: msg.text,
+          userId: msg.from.id,
+          sender: msg.from.first_name || 'Пользователь',
+          timestamp: new Date(msg.date * 1000).toISOString()
+        });
+      }
+    }
+    
+    console.log(`[HISTORY] Loaded ${chatHistory[chatId].length} messages for chat ${chatId}`);
+    
+    // Ограничиваем до 200 сообщений
+    if (chatHistory[chatId].length > 200) {
+      chatHistory[chatId] = chatHistory[chatId].slice(-200);
+    }
+    
+  } catch (error) {
+    console.error(`[HISTORY] Error loading history for chat ${chatId}:`, error.message);
+  }
+};
+
 // Функция для проверки наличия админа в чате
 const isAdminInChat = async (bot, chatId) => {
   try {
@@ -503,6 +547,7 @@ async function analyzeSentiment(messages) {
 module.exports = { 
   processMessage,
   chatHistory, // Экспортируем историю чата
+  loadChatHistory, // Экспортируем функцию загрузки истории
   karmaUtils, // Экспортируем для тестирования
   processBuffer, // Экспортируем для тестирования
   analyzeSentiment // Экспортируем для тестирования

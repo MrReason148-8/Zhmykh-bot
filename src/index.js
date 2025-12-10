@@ -121,6 +121,11 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Загружаем историю чата при первом сообщении
+  if (!logic.chatHistory[chatId]) {
+    await logic.loadChatHistory(bot, chatId);
+  }
+
   // Дальше идет обычная логика...
   await logic.processMessage(bot, msg);
 });
