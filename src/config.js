@@ -1,24 +1,11 @@
 require('dotenv').config();
 
-// Собираем все ключи Gemini в массив
-const geminiKeys = [];
-if (process.env.GOOGLE_GEMINI_API_KEY) geminiKeys.push(process.env.GOOGLE_GEMINI_API_KEY);
-
-// Ищем ключи с суффиксами _2, _3 и т.д.
-let i = 2;
-while (process.env[`GOOGLE_GEMINI_API_KEY_${i}`]) {
-  geminiKeys.push(process.env[`GOOGLE_GEMINI_API_KEY_${i}`]);
-  i++;
-}
-
-console.log(`[CONFIG] Загружено ключей Gemini: ${geminiKeys.length}`);
-
-// Проверяем наличие ключа OpenRouter
-const openRouterKey = process.env.OPENROUTER_API_KEY;
-if (openRouterKey) {
-  console.log('[CONFIG] OpenRouter API ключ загружен');
+// Проверяем наличие ключа DeepSeek
+const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
+if (deepseekApiKey) {
+  console.log('[CONFIG] DeepSeek API ключ загружен');
 } else {
-  console.warn('[CONFIG] ВНИМАНИЕ: OpenRouter API ключ не найден в .env файле');
+  console.warn('[CONFIG] ВНИМАНИЕ: DeepSeek API ключ не найден в .env файле');
 }
 
 module.exports = {
@@ -27,44 +14,28 @@ module.exports = {
   adminId: parseInt(process.env.ADMIN_USER_ID, 10),
 
   // API ключи
-  geminiKeys: geminiKeys,
-  openRouterKey: openRouterKey,
+  deepseekApiKey: deepseekApiKey,
 
   // === НАСТРОЙКИ МОДЕЛЕЙ ===
   
-  // Ротация моделей (в порядке приоритета)
+  // Ротация моделей (только DeepSeek)
   modelRotation: [
     {
-      name: 'tngtech/deepseek-r1t2-chimera:free',
-      provider: 'openrouter',
-      priority: 'high',
+      name: 'deepseek-chat',
+      provider: 'deepseek',
       generationConfig: {
         max_tokens: 2000,
         temperature: 0.8,
         top_p: 0.9
       }
-    },
-    {
-      name: 'gemini-2.0-flash',
-      provider: 'gemini',
-      priority: 'low',
-      generationConfig: {
-        maxOutputTokens: 1500,
-        temperature: 0.5,
-        topP: 0.9,
-        topK: 30
-      },
-      tools: []
     }
   ],
   
   // === ОСНОВНЫЕ НАСТРОЙКИ ===
-  defaultModel: 'gemini-2.0-flash-exp',
+  defaultModel: 'deepseek-chat',
   contextSize: 200,
-  spontaneousChance: 0.02, // Шанс спонтанного сообщения (2%)
+  spontaneousChance: 0.03, // Шанс спонтанного сообщения (3%)
   triggerRegex: /(?<![а-яёa-z])(жмых|zhmykh)(?![а-яёa-z])/i,
-  geminiBaseUrl: process.env.GEMINI_BASE_URL || undefined,
-  openRouterKey: process.env.OPENROUTER_API_KEY || null,
   
   // === НАСТРОЙКИ КАРМЫ ===
   karma: {
