@@ -171,8 +171,12 @@ const loadChatHistory = async (bot, chatId) => {
   try {
     console.log(`[HISTORY] Loading history for chat ${chatId}...`);
     
-    // Получаем последние 100 сообщений
-    const messages = await bot.getChatHistory(chatId, { limit: 100 });
+    // Получаем последние 100 сообщений через getUpdates
+    const updates = await bot.getUpdates({
+      offset: -100,
+      limit: 100,
+      timeout: 0
+    });
     
     if (!chatHistory[chatId]) {
       chatHistory[chatId] = [];
@@ -180,10 +184,13 @@ const loadChatHistory = async (bot, chatId) => {
     
     chatHistory[chatId] = []; // Очищаем старую историю
     
-    // Обрабатываем сообщения в обратном порядке (от старых к новым)
-    const reversedMessages = messages.reverse();
+    // Фильтруем сообщения для этого чата
+    const chatMessages = updates
+      .filter(update => update.message && update.message.chat.id === chatId)
+      .map(update => update.message)
+      .reverse(); // От старых к новым
     
-    for (const msg of reversedMessages) {
+    for (const msg of chatMessages) {
       if (msg.text && msg.from) {
         // Определяем роль
         const isBotMessage = msg.from.username === bot.options.username || msg.from.is_bot;
