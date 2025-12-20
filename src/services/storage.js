@@ -23,7 +23,7 @@ class StorageService {
     // Инициализация отложенного сохранения
     this.saveDebounced = debounce(this._saveToFile.bind(this), 5000);
     this.saveProfilesDebounced = debounce(this._saveProfilesToFile.bind(this), 5000);
-    
+
     // Инициализация данных
     this.data = { chats: {}, reminders: [] };
     this.profiles = {};
@@ -158,9 +158,9 @@ class StorageService {
   getProfile(chatId, userId, isFirstMessage = false) {
     // Специальная логика для админа
     if (userId === config.adminId) {
-      const adminProfile = { 
-        ...DEFAULT_PROFILE, 
-        relationship: 100, 
+      const adminProfile = {
+        ...DEFAULT_PROFILE,
+        relationship: 100,
         realName: 'Админ',
         isFirstInteraction: false
       };
@@ -183,18 +183,18 @@ class StorageService {
     }
 
     const profile = this.profiles[chatId][userId];
-    
+
     // Обновляем флаг первого взаимодействия
     if (isFirstMessage && profile.isFirstInteraction) {
       profile.isFirstInteraction = false;
       profile.lastInteraction = new Date().toISOString();
       this.saveProfilesDebounced();
     }
-    
+
     // Убедимся, что все обязательные поля есть в профиле
     const mergedProfile = { ...DEFAULT_PROFILE, ...profile };
     this.profiles[chatId][userId] = mergedProfile;
-    
+
     return mergedProfile;
   }
 
@@ -214,7 +214,7 @@ class StorageService {
     for (const userId of userIds) {
       result[userId] = this.getProfile(chatId, userId);
     }
-    
+
     return result;
   }
 
@@ -229,24 +229,24 @@ class StorageService {
     }
 
     const updatedProfiles = [];
-    
+
     for (const [userId, data] of Object.entries(updatesMap)) {
       // Получаем текущий профиль или создаем новый
       const current = this.getProfile(chatId, userId);
-      
+
       // Обновляем данные профиля
       if (data.realName && data.realName !== "Неизвестно") {
         current.realName = data.realName;
       }
-      
+
       if (data.facts) {
         current.facts = data.facts;
       }
-      
+
       if (data.attitude) {
         current.attitude = data.attitude;
       }
-      
+
       if (data.relationship !== undefined) {
         const score = parseInt(data.relationship, 10);
         if (!isNaN(score)) {
@@ -254,19 +254,54 @@ class StorageService {
           current.relationship = Math.max(0, Math.min(100, score));
         }
       }
-      
+
       // Обновляем время последнего взаимодействия
       current.lastInteraction = new Date().toISOString();
-      
+
       updatedProfiles.push(userId);
     }
-    
+
     // Сохраняем изменения
     if (updatedProfiles.length > 0) {
       this.saveProfilesDebounced();
     }
-    
+
     return updatedProfiles;
+  }
+
+  /**
+   * Найти профили пользователей по имени или нику
+   * @param {string|number} chatId - ID чата
+   * @param {string} query - Поисковый запрос
+   * @returns {Array<Object>} Список найденных профилей
+   */
+  findUserProfilesByName(chatId, query) {
+    if (!this.profiles[chatId]) return [];
+
+    const lowerQuery = query.toLowerCase();
+    const results = [];
+    const chatProfiles = this.profiles[chatId];
+    const chatName = chatProfiles._chatName || "";
+
+    // Ищем среди всех ключей, которые похожи на ID пользователя
+    for (const [userId, profile] of Object.entries(chatProfiles)) {
+      if (userId === '_chatName') continue;
+
+      const realName = (profile.realName || "").toLowerCase();
+      // Тут можно добавить другие поля для поиска, если они есть
+
+      if (realName.includes(lowerQuery) || userId === query) {
+        results.push({ id: userId, ...profile });
+      }
+    }
+
+    // Если по реальному имени не нашли, а запрос совпадает с названием чата/ника владельца (заглушка)
+    if (results.length === 0 && chatName.toLowerCase().includes(lowerQuery)) {
+      // Пытаемся найти хотя бы одного пользователя в этом чате
+      // (Это упрощенная логика, в идеале надо хранить ники всех участников)
+    }
+
+    return results;
   }
 
   // === НАПОМИНАНИЯ ===
@@ -334,20 +369,20 @@ class StorageService {
    */
   addChatMessage(chatId, message) {
     const historyPath = path.join(__dirname, '../../data/chat_history');
-    
+
     // Создаем папку, если нет
     if (!fs.existsSync(historyPath)) {
       fs.mkdirSync(historyPath, { recursive: true });
     }
-    
+
     const filePath = path.join(historyPath, `${chatId}.jsonl`);
-    
+
     // Добавляем сообщение в конец файла (JSONL формат - одна строка JSON)
     const messageWithTimestamp = {
       ...message,
       saved_at: new Date().toISOString()
     };
-    
+
     fs.appendFileSync(filePath, JSON.stringify(messageWithTimestamp) + '\n');
   }
 
@@ -359,26 +394,26 @@ class StorageService {
    */
   loadChatHistory(chatId, limit = null) {
     const filePath = path.join(__dirname, '../../data/chat_history', `${chatId}.jsonl`);
-    
+
     try {
       if (!fs.existsSync(filePath)) {
         return [];
       }
-      
+
       const content = fs.readFileSync(filePath, 'utf8');
       const lines = content.trim().split('\n').filter(line => line);
-      
+
       // Парсим JSON
       const messages = lines.map(line => JSON.parse(line));
-      
+
       // Если лимит не указан, возвращаем все сообщения
       if (limit === null) {
         return messages;
       }
-      
+
       // Иначе берем последние limit сообщений
       return messages.slice(-limit);
-      
+
     } catch (error) {
       console.error(`Error loading chat history for ${chatId}:`, error);
       return [];
@@ -392,22 +427,22 @@ class StorageService {
    */
   getChatHistoryStats(chatId) {
     const filePath = path.join(__dirname, '../../data/chat_history', `${chatId}.jsonl`);
-    
+
     try {
       if (!fs.existsSync(filePath)) {
         return { totalMessages: 0, fileSize: 0 };
       }
-      
+
       const stats = fs.statSync(filePath);
       const content = fs.readFileSync(filePath, 'utf8');
       const lines = content.trim().split('\n').filter(line => line);
-      
+
       return {
         totalMessages: lines.length,
         fileSize: stats.size,
         lastModified: stats.mtime
       };
-      
+
     } catch (error) {
       console.error(`Error getting chat history stats for ${chatId}:`, error);
       return { totalMessages: 0, fileSize: 0 };

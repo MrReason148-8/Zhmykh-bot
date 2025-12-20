@@ -101,17 +101,20 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Обработка команды /summary
-  if (msg.text && msg.text.startsWith('/summary')) {
+  // Обработка команды /summary и текстовых запросов на итоги дня
+  const isSummaryRequest = msg.text && (
+    msg.text.startsWith('/summary') ||
+    /жмых[, ]+(даи|дай)?\s*итоги\s*дня/i.test(msg.text) ||
+    /итоги\s*дня\s*жмых/i.test(msg.text)
+  );
+
+  if (isSummaryRequest) {
     // Загружаем полную историю из файла (без ограничений)
+    const chatId = msg.chat.id;
     const fullHistory = storage.loadChatHistory(chatId, null);
-    const memoryHistory = logic.chatHistory[chatId] || [];
-    
-    console.log(`[SUMMARY] History for chat ${chatId}: ${memoryHistory.length} in memory, ${fullHistory.length} total in file`);
-    if (fullHistory.length > 0) {
-      console.log(`[SUMMARY] Last messages:`, fullHistory.slice(-3).map(h => `${h.role}: ${h.text.substring(0, 30)}...`));
-    }
-    
+
+    console.log(`[SUMMARY] History for chat ${chatId}: ${fullHistory.length} total messages`);
+
     const summary = await ai.getDailySummary(fullHistory);
     await bot.sendMessage(chatId, summary);
     return;
@@ -122,6 +125,24 @@ bot.on('message', async (msg) => {
     const history = logic.chatHistory[chatId] || [];
     const verdict = await ai.getJudgeDebate(history);
     await bot.sendMessage(chatId, verdict);
+    return;
+  }
+
+  // Обработка запросов на досье пользователя
+  const dossierMatch = msg.text && msg.text.match(/жмых[, ]+(?:расскажи\s+о|что\s+ты\s+думаешь\s+о|кто\s+такой)\s+(.+)/i);
+  if (dossierMatch) {
+    const query = dossierMatch[1].trim();
+    const foundProfiles = storage.findUserProfilesByName(chatId, query);
+
+    if (foundProfiles.length === 0) {
+      await bot.sendMessage(chatId, `Кто такой "${query}"? Я не знаю такого биомусора.`);
+      return;
+    }
+
+    // Если нашли нескольких, берем первого (или можно было бы уточнить)
+    const profile = foundProfiles[0];
+    const dossier = await ai.getUserDossier(profile);
+    await bot.sendMessage(chatId, dossier);
     return;
   }
 
